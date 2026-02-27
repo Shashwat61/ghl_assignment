@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+public/*
+!public/.gitkeep
+frontend/node_modules/
+frontend/dist/
+*.log
+.DS_Store
