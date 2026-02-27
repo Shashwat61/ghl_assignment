@@ -15,6 +15,8 @@ export const useCopilotStore = defineStore('copilot', {
     // Simulation
     simulationStatus: 'idle', // 'idle' | 'running' | 'done' | 'error'
     simulationError: null,
+    simulationTimedOut: false,
+    simulationCompletedCount: 0,
     testCases: [],
     liveTranscripts: {}, // { [caseIndex]: [{role, content}] }
     results: [],
@@ -65,6 +67,8 @@ export const useCopilotStore = defineStore('copilot', {
     resetSimulation() {
       this.simulationStatus = 'idle';
       this.simulationError = null;
+      this.simulationTimedOut = false;
+      this.simulationCompletedCount = 0;
       this.testCases = [];
       this.liveTranscripts = {};
       this.results = [];
@@ -110,6 +114,8 @@ export const useCopilotStore = defineStore('copilot', {
           this.testCases = data.testCases;
           this.results = data.results;
           this.failures = data.failures;
+          this.simulationTimedOut = data.timedOut || false;
+          this.simulationCompletedCount = data.completedCount ?? data.results.length;
           this.simulationStatus = 'done';
           break;
 

@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth';
 import { hlClient } from '../services/hlClient';
 import { runFullSimulation, generateOptimizedPrompt, SimulationProgressEvent } from '../services/simulationEngine';
 import { FailureEntry } from '../services/promptChains';
+import { logger } from '../logger';
 
 const router = Router();
 
@@ -64,6 +65,7 @@ router.get(
 
       await runFullSimulation(agentPrompt, onProgress);
     } catch (err) {
+      logger.error('Simulation failed', { agentId, error: err instanceof Error ? err.stack : err });
       const message = err instanceof Error ? err.message : 'Simulation failed';
       sendEvent('error', { message });
     } finally {
@@ -103,15 +105,23 @@ router.post(
       }
 
       // Chain 5: Generate optimized prompt
+      logger.info('Generating optimized prompt', { agentId, failureCount: failures.length });
       const optimizedPrompt = await generateOptimizedPrompt(originalPrompt, failures);
+      logger.info('Optimized prompt generated, pushing to HL', { agentId });
 
       // Auto-push to HighLevel immediately
       await hlClient.updateAgent(agentId, optimizedPrompt);
-
-      console.log(`✓ Optimized prompt pushed to HL agent ${agentId}`);
+      logger.info(`Optimized prompt pushed to HL agent ${agentId}`);
 
       res.json({ optimizedPrompt, originalPrompt });
     } catch (err) {
+      const axiosData = (err as any)?.response?.data;
+      logger.error('Optimize failed', {
+        agentId: req.body?.agentId,
+        status: (err as any)?.response?.status,
+        responseData: axiosData,
+        error: err instanceof Error ? err.stack : err,
+      });
       next(err);
     }
   },

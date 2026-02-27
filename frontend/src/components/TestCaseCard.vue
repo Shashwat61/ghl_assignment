@@ -5,6 +5,7 @@
       <KpiResultBadge v-if="result" :result="result.overall" />
       <span v-else-if="isActive" class="running-badge">
         <span class="spinner"></span> Running
+        <span class="timer">{{ formattedTime }}</span>
       </span>
       <span v-else class="pending-badge">Pending</span>
     </div>
@@ -26,7 +27,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, ref, watch, onUnmounted } from 'vue';
 import KpiResultBadge from './KpiResultBadge.vue';
 
 const props = defineProps({
@@ -41,6 +42,35 @@ const cardClass = computed(() => ({
   'test-case-card--fail': props.result?.overall === 'fail',
   'test-case-card--active': props.isActive,
 }));
+
+// Timer
+const elapsed = ref(0);
+let timerHandle = null;
+
+watch(() => props.isActive, (active) => {
+  if (active) {
+    elapsed.value = 0;
+    timerHandle = setInterval(() => { elapsed.value++ }, 1000);
+  } else {
+    clearInterval(timerHandle);
+    timerHandle = null;
+  }
+}, { immediate: true });
+
+watch(() => props.result, (result) => {
+  if (result) {
+    clearInterval(timerHandle);
+    timerHandle = null;
+  }
+});
+
+onUnmounted(() => clearInterval(timerHandle));
+
+const formattedTime = computed(() => {
+  const m = Math.floor(elapsed.value / 60);
+  const s = elapsed.value % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+});
 
 function getKpiResult(kpi) {
   if (!props.result) return null;
@@ -149,6 +179,13 @@ function getKpiIcon(kpi) {
 .pending-badge {
   font-size: 11px;
   color: #475569;
+}
+
+.timer {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: #a78bfa;
+  margin-left: 2px;
 }
 
 .spinner {

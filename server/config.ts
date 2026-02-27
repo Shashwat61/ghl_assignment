@@ -9,9 +9,10 @@ const envSchema = z.object({
   HL_REDIRECT_URI: z.string().default('http://localhost:3000/redirect'),
   ANTHROPIC_API_KEY: z.string().min(1, 'ANTHROPIC_API_KEY is required'),
   SESSION_SECRET: z.string().default('dev-secret'),
-  CONVERSATION_TURNS: z.string().default('6').transform(Number),
   NUM_TEST_CASES: z.string().default('5').transform(Number),
-  SIMULATION_TIMEOUT_MS: z.string().default('120000').transform(Number),
+  MAX_TURNS_PER_CASE: z.string().default('15').transform(Number),
+  PER_CASE_TIMEOUT_MS: z.string().default('120000').transform(Number),
+  SIMULATION_TIMEOUT_MS: z.string().default('660000').transform(Number),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -54,8 +55,9 @@ export const config = {
   },
 
   simulation: {
-    conversationTurns: env.CONVERSATION_TURNS,
     numTestCases: env.NUM_TEST_CASES,
+    maxTurnsPerCase: env.MAX_TURNS_PER_CASE,
+    perCaseTimeoutMs: env.PER_CASE_TIMEOUT_MS,
     timeoutMs: env.SIMULATION_TIMEOUT_MS,
   },
 } as const;

@@ -40,6 +40,39 @@
 
 ---
 
+## 2026-02-27 Decision: Graceful Partial Completion on Simulation Timeout
+
+**Context:** The simulation runs up to 65 sequential Claude API calls (5 cases × 6 turns × 2 chains + 5 evaluations). With a 120s timeout, it's possible the timeout fires mid-run — either mid-conversation or between test cases.
+
+**Decision:** Replace the blunt `Promise.race` timeout (which killed everything and returned nothing) with a cooperative cancellation flag (`timedOut` boolean set by `setTimeout`). After each async call, the engine checks the flag and exits the loop early if set. Only fully completed test cases are evaluated and included in results.
+
+**KPI standpoint:** Timed-out cases are excluded from results entirely — not marked pass or fail. Pass rate is calculated only over completed cases. Marking incomplete cases as failures would be misleading since the agent never got a chance to respond.
+
+**User experience:** A yellow warning banner shows: "Simulation timed out — showing results for X of N test cases." The Optimize button still appears if there are failures in the completed cases — partial results are still actionable.
+
+**Tradeoff:** If timeout fires mid-conversation-turn (while awaiting a Claude response), the current turn completes before the flag is checked — so the actual cutoff may be slightly after the timeout boundary. This is acceptable; hard-killing a Claude API call mid-response would leave partial data.
+
+**Impact:** `simulationEngine.ts` — removed `runSimulationCore`, rewrote `runFullSimulation` with cooperative flag. `complete` SSE event now includes `timedOut: boolean` and `completedCount: number`. Store adds `simulationTimedOut` + `simulationCompletedCount`. Dashboard shows yellow warning banner on timeout.
+
+---
+
+## 2026-02-27 Decision: Remove CONVERSATION_TURNS — Natural Conversation Ending Instead
+
+**Context:** The simulation was capping conversations at a fixed `CONVERSATION_TURNS` count (default 6). This caused two problems: (1) conversations got cut off mid-way before the agent could collect all info or wrap up, causing KPIs like "must confirm details" or "must say goodbye" to fail unfairly; (2) the turn count was an arbitrary param that didn't reflect how real conversations work.
+
+**Decision:** Remove `CONVERSATION_TURNS` entirely. Conversations now run turn-by-turn until one of three exit conditions:
+1. Agent produces a natural conversation-ending response (detected via phrase matching)
+2. Per-conversation timeout fires (`PER_CASE_TIMEOUT_MS`, default 25s) — case skipped, not evaluated
+3. Safety max-turns cap (`MAX_TURNS_PER_CASE`, default 15) hit — evaluates what it has
+
+**Why this is better:** Short scenarios finish in 3-4 turns naturally. Complex scenarios get the turns they need. KPI evaluation is always on complete transcripts — no more unfair failures from premature cutoff. Global 120s timeout remains the outer safety net.
+
+**Tradeoff:** Slightly less predictable runtime since conversation length varies. Mitigated by per-case timeout and max-turns cap.
+
+**Impact:** Removed `CONVERSATION_TURNS` from `.env` and `config.ts`. Added `MAX_TURNS_PER_CASE` and `PER_CASE_TIMEOUT_MS` env vars. Chain 3 (`simulateAgentTurn`) now returns `{ content, isConversationEnd }` instead of a plain string. `simulationEngine.ts` inner loop exits on natural end signal, per-case timeout, or safety cap.
+
+---
+
 ## 2026-02-26 Decision: TypeScript for Backend
 **Context:** User requested TypeScript with Express for the backend.
 **Decision:** Use TypeScript with Express, compiled via ts-node for dev and tsc for production.

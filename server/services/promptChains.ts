@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config';
+import { logger } from '../logger';
 
 const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
 
@@ -50,7 +51,7 @@ async function extractJSON<T>(text: string, retryFn: () => Promise<string>, retr
     }
 
     if (retries < 2) {
-      console.warn(`[promptChains] JSON parse failed, retry ${retries + 1}/2`);
+      logger.warn(`JSON parse failed, retry ${retries + 1}/2`, { raw: text.slice(0, 200) });
       const newText = await retryFn();
       return extractJSON<T>(newText, retryFn, retries + 1);
     }
@@ -161,17 +162,35 @@ ${historyText ? `Conversation so far:\n${historyText}\n\n` : ''}${history.length
 // Chain 3 — Simulate Agent Turn
 // ---------------------------------------------------------------------------
 
+const END_OF_CONVERSATION_PHRASES = [
+  'have a great day', 'have a wonderful day', 'have a good day',
+  'goodbye', 'good bye', 'take care', 'thank you for calling',
+  'thanks for calling', 'is there anything else i can help',
+  'is there anything else', 'have a pleasant day', 'farewell',
+  'we look forward to seeing you', "we'll be in touch", 'we will be in touch',
+];
+
+export interface AgentTurnResult {
+  content: string;
+  isConversationEnd: boolean;
+}
+
 export async function simulateAgentTurn(
   agentPrompt: string,
   history: ConversationTurn[],
-): Promise<string> {
-  // Build message history for the agent
+): Promise<AgentTurnResult> {
   const messages: Anthropic.MessageParam[] = history.map((turn) => ({
     role: turn.role,
     content: turn.content,
   }));
 
-  return callClaudeWithHistory(agentPrompt, messages, 1024);
+  const content = await callClaudeWithHistory(agentPrompt, messages, 1024);
+  const lower = content.toLowerCase();
+  const isConversationEnd = END_OF_CONVERSATION_PHRASES.some((phrase) =>
+    lower.includes(phrase),
+  );
+
+  return { content, isConversationEnd };
 }
 
 // ---------------------------------------------------------------------------

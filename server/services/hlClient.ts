@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { config } from '../config';
 import { sessionStore } from './sessionStore';
+import { logger } from '../logger';
 
 export interface HLAgent {
   id: string;
@@ -73,6 +74,18 @@ class HLClient {
     return response.data;
   }
 
+  private normalizeAgent(raw: Record<string, unknown>): HLAgent {
+    return {
+      ...raw,
+      id: raw.id as string,
+      name: (raw.agentName || raw.name || 'Unnamed Agent') as string,
+      systemPrompt: (raw.agentPrompt || raw.systemPrompt || '') as string,
+      description: (raw.businessName || raw.description || '') as string,
+      status: (raw.status || 'active') as string,
+      phoneNumber: (raw.inboundNumber || raw.phoneNumber || '') as string,
+    };
+  }
+
   async getAgents(): Promise<HLAgent[]> {
     try {
       const response = await axios.get(
@@ -82,7 +95,8 @@ class HLClient {
           params: { locationId: this.locationId },
         },
       );
-      return response.data?.agents || response.data || [];
+      const raw: Record<string, unknown>[] = response.data?.agents || response.data || [];
+      return raw.map((a) => this.normalizeAgent(a));
     } catch (error: unknown) {
       if (axios.isAxiosError(error) && error.response?.status === 404) {
         return [];
@@ -99,17 +113,28 @@ class HLClient {
         params: { locationId: this.locationId },
       },
     );
-    return response.data?.agent || response.data;
+    const raw = response.data?.agent || response.data;
+    return this.normalizeAgent(raw);
   }
 
   async updateAgent(agentId: string, systemPrompt: string): Promise<HLAgent> {
-    const currentAgent = await this.getAgent(agentId);
-    const response = await axios.put(
-      `${config.hl.apiBaseUrl}/voice-ai/agents/${agentId}`,
-      { ...currentAgent, systemPrompt },
-      { headers: this.authHeaders },
-    );
-    return response.data?.agent || response.data;
+    const url = `${config.hl.apiBaseUrl}/voice-ai/agents/${agentId}`;
+    const body = { agentPrompt: systemPrompt };
+    logger.debug('PATCH updateAgent', { url, locationId: this.locationId, bodyKeys: Object.keys(body) });
+    try {
+      const response = await axios.patch(url, body, { headers: this.authHeaders });
+      const updated = response.data?.agent || response.data;
+      return this.normalizeAgent(updated);
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        logger.error('updateAgent HL error', {
+          status: err.response?.status,
+          responseData: err.response?.data,
+          requestUrl: url,
+        });
+      }
+      throw err;
+    }
   }
 }
 

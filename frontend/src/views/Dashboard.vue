@@ -56,6 +56,11 @@
         </div>
       </div>
 
+      <!-- Timeout banner -->
+      <div v-if="store.simulationTimedOut" class="warning-banner">
+        ⏱ Simulation timed out — showing results for {{ store.simulationCompletedCount }} of {{ store.testCases.length }} test cases. Pass rate calculated over completed cases only.
+      </div>
+
       <!-- Error banner -->
       <div v-if="store.simulationStatus === 'error'" class="error-banner">
         ⚠ {{ store.simulationError }}
@@ -76,7 +81,7 @@
             <div v-if="store.testCases.length === 0 && store.simulationStatus !== 'running'" class="empty-panel">
               <span class="text-muted">Run simulation to generate test cases</span>
             </div>
-            <div v-else class="test-cases-list">
+            <div v-else class="test-cases-list" ref="testCasesListEl">
               <TestCaseCard
                 v-for="(tc, i) in store.testCases"
                 :key="i"
@@ -144,7 +149,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, nextTick } from 'vue';
 import { useRouter } from 'vue-router';
 import TestCaseCard from '../components/TestCaseCard.vue';
 import TranscriptViewer from '../components/TranscriptViewer.vue';
@@ -155,7 +160,9 @@ const store = useCopilotStore();
 const router = useRouter();
 const activeCase = ref(null);
 const selectedCaseIndex = ref(null);
+const userHasSelected = ref(false);
 const optimizationError = ref(null);
+const testCasesListEl = ref(null);
 
 const selectedResult = computed(() =>
   selectedCaseIndex.value !== null ? store.results[selectedCaseIndex.value] || null : null,
@@ -169,7 +176,17 @@ const passRateClass = computed(() => {
 
 function selectCase(index) {
   selectedCaseIndex.value = index;
+  userHasSelected.value = true;
 }
+
+watch(activeCase, async (index) => {
+  if (index === null) return;
+  await nextTick();
+  const list = testCasesListEl.value;
+  if (!list) return;
+  const card = list.children[index];
+  if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+});
 
 let eventSource = null;
 
@@ -185,6 +202,7 @@ function runSimulation() {
   store.startSimulation();
   activeCase.value = null;
   selectedCaseIndex.value = null;
+  userHasSelected.value = false;
 
   const url = `/api/simulate?agentId=${encodeURIComponent(store.selectedAgent.id)}`;
   eventSource = new EventSource(url);
@@ -193,7 +211,9 @@ function runSimulation() {
     const data = JSON.parse(e.data);
     store.handleSSEEvent('testcase_start', data);
     activeCase.value = data.index;
-    selectedCaseIndex.value = data.index;
+    if (!userHasSelected.value) {
+      selectedCaseIndex.value = data.index;
+    }
   });
 
   eventSource.addEventListener('turn', (e) => {
@@ -352,6 +372,16 @@ async function optimize() {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.warning-banner {
+  padding: 12px 16px;
+  background: #451a03;
+  border: 1px solid #92400e;
+  border-radius: 8px;
+  color: #fcd34d;
+  font-size: 13px;
+  margin-bottom: 12px;
 }
 
 .error-banner {

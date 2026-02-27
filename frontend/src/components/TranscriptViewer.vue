@@ -1,9 +1,9 @@
 <template>
-  <div class="transcript-viewer">
+  <div class="transcript-viewer" ref="messagesEl">
     <div v-if="!transcript || transcript.length === 0" class="empty-state">
       <span class="text-muted">No messages yet</span>
     </div>
-    <div v-else class="messages" ref="messagesEl">
+    <div v-else class="messages">
       <div
         v-for="(turn, i) in transcript"
         :key="i"
@@ -31,15 +31,18 @@ const props = defineProps({
 
 const messagesEl = ref(null);
 
-watch(
-  () => props.transcript?.length,
-  async () => {
-    await nextTick();
-    if (messagesEl.value) {
-      messagesEl.value.scrollTop = messagesEl.value.scrollHeight;
-    }
-  },
-);
+async function scrollToBottom() {
+  await nextTick();
+  if (messagesEl.value) {
+    messagesEl.value.scrollTop = messagesEl.value.scrollHeight;
+  }
+}
+
+// Scroll on new messages
+watch(() => props.transcript?.length, scrollToBottom);
+
+// Scroll when transcript is swapped out entirely (case switch)
+watch(() => props.transcript, scrollToBottom);
 </script>
 
 <style scoped>

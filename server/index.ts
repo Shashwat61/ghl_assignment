@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { config } from './config';
+import { logger } from './logger';
 import { apiMiddleware, errorHandler } from './middleware/api';
 import authRouter from './routes/auth';
 import agentsRouter from './routes/agents';
@@ -48,14 +49,10 @@ app.get('*', (req, res) => {
 app.use(errorHandler);
 
 app.listen(config.port, () => {
-  console.log(`\n🚀 GHL Voice AI Copilot running on http://localhost:${config.port}`);
-  console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(
-    `   HL OAuth: ${config.hl.clientId ? '✓ configured' : '⚠ HL_CLIENT_ID not set'}`,
-  );
-  console.log(
-    `   Anthropic: ${config.anthropic.apiKey ? '✓ configured' : '⚠ ANTHROPIC_API_KEY not set'}`,
-  );
+  logger.info(`GHL Voice AI Copilot running on http://localhost:${config.port}`);
+  logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  logger.info(`HL OAuth: ${config.hl.clientId ? '✓ configured' : '⚠ HL_CLIENT_ID not set'}`);
+  logger.info(`Anthropic: ${config.anthropic.apiKey ? '✓ configured' : '⚠ ANTHROPIC_API_KEY not set'}`);
 });
 
 export default app;
