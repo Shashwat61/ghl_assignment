@@ -9,7 +9,7 @@
     "dev": "ts-node --project tsconfig.json server/index.ts",
     "build:server": "tsc --project tsconfig.json",
     "build:frontend": "cd frontend && npm run build",
-    "build": "npm run build:server && npm run build:frontend",
+    "build": "npm run build:server && cd frontend && npm install && npm run build",
     "start": "node dist/server/index.js",
     "demo": "npm run build && npm start"
   },
