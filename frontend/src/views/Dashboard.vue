@@ -39,21 +39,44 @@
 
           <div v-else-if="store.simulationStatus === 'running'" class="running-indicator">
             <span class="spinner-large"></span>
-            <span>Simulating...</span>
+            <span v-if="store.flywheelPhase === 'fix'">
+              Fix Loop · Attempt {{ store.flywheelAttempt }}/{{ store.flywheelTotal }}
+            </span>
+            <span v-else-if="store.flywheelPhase === 'harden'">
+              Harden · Batch {{ store.flywheelAttempt }}/{{ store.flywheelTotal }}
+            </span>
+            <span v-else-if="store.optimizationStatus === 'optimizing'">⚙ Optimizing...</span>
+            <span v-else>Simulating...</span>
           </div>
 
           <template v-if="store.simulationStatus === 'done'">
             <button
-              v-if="store.hasFailures"
-              class="btn btn-primary"
-              :disabled="store.optimizationStatus === 'optimizing'"
-              @click="optimize"
+              v-if="store.promptHistory.length > 1"
+              class="btn btn-secondary"
+              @click="$router.push('/prompts')"
             >
-              {{ store.optimizationStatus === 'optimizing' ? '⚙ Optimizing...' : '⚡ Optimize Prompt' }}
+              📋 Prompt History ({{ store.promptHistory.length }})
             </button>
             <button class="btn btn-secondary" @click="runSimulation">↻ Re-run</button>
           </template>
         </div>
+      </div>
+
+      <!-- Active prompt strip -->
+      <div v-if="store.activePrompt" class="active-prompt-strip">
+        <div class="active-prompt-strip__label">
+          <span class="dot">●</span>
+          Active Prompt
+          <span v-if="store.promptHistory.length > 0" class="prompt-version">
+            {{ store.promptHistory[store.promptHistory.length - 1].label }}
+          </span>
+        </div>
+        <div class="active-prompt-strip__text">{{ promptPreview }}</div>
+        <button
+          v-if="store.promptHistory.length > 0"
+          class="active-prompt-strip__link"
+          @click="$router.push('/prompts')"
+        >View full →</button>
       </div>
 
       <!-- Timeout banner -->
@@ -65,9 +88,7 @@
       <div v-if="store.simulationStatus === 'error'" class="error-banner">
         ⚠ {{ store.simulationError }}
       </div>
-      <div v-if="optimizationError" class="error-banner">
-        ⚠ Optimization failed: {{ optimizationError }}
-      </div>
+
 
       <!-- 3-Panel Layout -->
       <div class="panels">
@@ -150,23 +171,27 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue';
-import { useRouter } from 'vue-router';
 import TestCaseCard from '../components/TestCaseCard.vue';
 import TranscriptViewer from '../components/TranscriptViewer.vue';
 import KpiResultBadge from '../components/KpiResultBadge.vue';
 import { useCopilotStore } from '../stores/copilot.js';
 
 const store = useCopilotStore();
-const router = useRouter();
 const activeCase = ref(null);
 const selectedCaseIndex = ref(null);
 const userHasSelected = ref(false);
-const optimizationError = ref(null);
 const testCasesListEl = ref(null);
 
 const selectedResult = computed(() =>
   selectedCaseIndex.value !== null ? store.results[selectedCaseIndex.value] || null : null,
 );
+
+const promptPreview = computed(() => {
+  const p = store.activePrompt;
+  if (!p) return '';
+  const first = p.split('\n').find((l) => l.trim()) || '';
+  return first.length > 120 ? first.slice(0, 120) + '…' : first;
+});
 
 const passRateClass = computed(() => {
   if (store.passRate >= 80) return 'text-success';
@@ -204,46 +229,46 @@ function runSimulation() {
   selectedCaseIndex.value = null;
   userHasSelected.value = false;
 
-  const url = `/api/simulate?agentId=${encodeURIComponent(store.selectedAgent.id)}`;
+  const url = `/api/flywheel?agentId=${encodeURIComponent(store.selectedAgent.id)}`;
   eventSource = new EventSource(url);
+  let completed = false;
 
-  eventSource.addEventListener('testcase_start', (e) => {
-    const data = JSON.parse(e.data);
-    store.handleSSEEvent('testcase_start', data);
-    activeCase.value = data.index;
-    if (!userHasSelected.value) {
-      selectedCaseIndex.value = data.index;
-    }
-  });
-
-  eventSource.addEventListener('turn', (e) => {
-    store.handleSSEEvent('turn', JSON.parse(e.data));
-  });
-
-  eventSource.addEventListener('evaluated', (e) => {
-    store.handleSSEEvent('evaluated', JSON.parse(e.data));
+  const sseEvents = ['testcase_start', 'turn', 'evaluated', 'phase_change', 'optimize_start', 'optimize_complete', 'status'];
+  sseEvents.forEach((eventType) => {
+    eventSource.addEventListener(eventType, (e) => {
+      const data = JSON.parse(e.data);
+      store.handleSSEEvent(eventType, data);
+      if (eventType === 'testcase_start') {
+        activeCase.value = data.index;
+        if (!userHasSelected.value) {
+          selectedCaseIndex.value = data.index;
+        }
+      }
+    });
   });
 
   eventSource.addEventListener('complete', (e) => {
+    completed = true;
     store.handleSSEEvent('complete', JSON.parse(e.data));
     activeCase.value = null;
     eventSource.close();
     eventSource = null;
   });
 
+  // Named 'error' event = server explicitly emitted an error event with data
   eventSource.addEventListener('error', (e) => {
     if (e.data) {
       store.handleSSEEvent('error', JSON.parse(e.data));
-    } else {
-      store.handleSSEEvent('error', { message: 'Connection lost' });
+      activeCase.value = null;
+      eventSource.close();
+      eventSource = null;
     }
-    activeCase.value = null;
-    eventSource.close();
-    eventSource = null;
+    // No e.data means connection closed — handled by onerror below
   });
 
   eventSource.onerror = () => {
-    if (store.simulationStatus === 'running') {
+    // Fires when connection closes — ignore if we already got 'complete'
+    if (!completed && store.simulationStatus === 'running') {
       store.handleSSEEvent('error', { message: 'SSE connection dropped' });
     }
     if (eventSource) {
@@ -253,15 +278,7 @@ function runSimulation() {
   };
 }
 
-async function optimize() {
-  optimizationError.value = null;
-  try {
-    await store.optimizePrompt();
-    router.push('/result');
-  } catch (err) {
-    optimizationError.value = err.response?.data?.message || err.message || 'Optimization failed';
-  }
-}
+
 </script>
 
 <style scoped>
@@ -372,6 +389,68 @@ async function optimize() {
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.active-prompt-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: #13151f;
+  border: 1px solid #2d3348;
+  border-radius: 8px;
+  margin-bottom: 4px;
+  min-width: 0;
+}
+
+.active-prompt-strip__label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.active-prompt-strip__label .dot {
+  color: #7c3aed;
+  font-size: 8px;
+}
+
+.prompt-version {
+  color: #a78bfa;
+  font-size: 10px;
+  background: rgba(124,58,237,0.12);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.active-prompt-strip__text {
+  flex: 1;
+  font-size: 12px;
+  color: #94a3b8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+  min-width: 0;
+}
+
+.active-prompt-strip__link {
+  font-size: 12px;
+  color: #7c3aed;
+  background: none;
+  border: none;
+  cursor: pointer;
+  white-space: nowrap;
+  padding: 0;
+}
+
+.active-prompt-strip__link:hover {
+  text-decoration: underline;
 }
 
 .warning-banner {

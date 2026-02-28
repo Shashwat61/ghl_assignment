@@ -27,6 +27,16 @@ export const useCopilotStore = defineStore('copilot', {
     optimizedPrompt: '',
     optimizationStatus: 'idle', // 'idle' | 'optimizing' | 'done' | 'error'
     optimizationError: null,
+
+    // Flywheel phase progress
+    flywheelPhase: null, // 'fix' | 'harden' | null
+    flywheelAttempt: 0,
+    flywheelTotal: 0,
+    flywheelStatusMessage: '',
+
+    // Prompt history (in-memory, per agent session)
+    // [{ prompt, label, timestamp, passRate, failures }]
+    promptHistory: [],
   }),
 
   getters: {
@@ -40,6 +50,10 @@ export const useCopilotStore = defineStore('copilot', {
     },
     hasFailures: (state) => state.failures.length > 0,
     transcriptForCase: (state) => (index) => state.liveTranscripts[index] || [],
+    activePrompt: (state) =>
+      state.promptHistory.length > 0
+        ? state.promptHistory[state.promptHistory.length - 1].prompt
+        : state.originalPrompt,
   },
 
   actions: {
@@ -77,6 +91,11 @@ export const useCopilotStore = defineStore('copilot', {
       this.optimizedPrompt = '';
       this.optimizationStatus = 'idle';
       this.optimizationError = null;
+      this.flywheelPhase = null;
+      this.flywheelAttempt = 0;
+      this.flywheelTotal = 0;
+      this.flywheelStatusMessage = '';
+      this.promptHistory = [];
     },
 
     startSimulation() {
@@ -87,6 +106,11 @@ export const useCopilotStore = defineStore('copilot', {
       this.liveTranscripts = {};
       this.results = [];
       this.failures = [];
+      // Capture prompt at run time — use active (optimized) or agent's original
+      const agentPrompt = this.selectedAgent.systemPrompt || this.selectedAgent.description || '';
+      if (!this.originalPrompt) {
+        this.originalPrompt = agentPrompt;
+      }
     },
 
     handleSSEEvent(eventType, data) {
@@ -110,13 +134,70 @@ export const useCopilotStore = defineStore('copilot', {
           this.results[data.index] = data.evaluation;
           break;
 
-        case 'complete':
+        case 'complete': {
           this.testCases = data.testCases;
           this.results = data.results;
           this.failures = data.failures;
           this.simulationTimedOut = data.timedOut || false;
           this.simulationCompletedCount = data.completedCount ?? data.results.length;
           this.simulationStatus = 'done';
+          this.flywheelPhase = null;
+          this.optimizationStatus = 'idle';
+
+          const finalPassRate = data.results.length > 0
+            ? Math.round((data.results.filter((r) => r.overall === 'pass').length / data.results.length) * 100)
+            : 0;
+
+          // Record original prompt in history on first simulation
+          if (this.promptHistory.length === 0 && this.originalPrompt) {
+            this.promptHistory.push({
+              prompt: this.originalPrompt,
+              label: 'v1 · Original',
+              timestamp: new Date().toISOString(),
+              passRate: finalPassRate,
+              failures: data.failures,
+            });
+          }
+
+          // Update pass rate on the last history entry (the active/optimized prompt)
+          if (this.promptHistory.length > 0) {
+            const last = this.promptHistory[this.promptHistory.length - 1];
+            last.passRate = finalPassRate;
+          }
+
+          // Sync currentPrompt from flywheel if provided
+          if (data.currentPrompt && data.currentPrompt !== this.originalPrompt) {
+            this.optimizedPrompt = data.currentPrompt;
+          }
+          break;
+        }
+
+        case 'phase_change':
+          this.flywheelPhase = data.phase;
+          this.flywheelAttempt = data.attempt;
+          this.flywheelTotal = data.total;
+          break;
+
+        case 'optimize_start':
+          this.optimizationStatus = 'optimizing';
+          break;
+
+        case 'optimize_complete': {
+          this.optimizationStatus = 'done';
+          this.optimizedPrompt = data.optimizedPrompt;
+          const version = this.promptHistory.length + 1;
+          this.promptHistory.push({
+            prompt: data.optimizedPrompt,
+            label: `v${version} · Optimized`,
+            timestamp: new Date().toISOString(),
+            passRate: null,
+            failures: this.failures,
+          });
+          break;
+        }
+
+        case 'status':
+          this.flywheelStatusMessage = data.message;
           break;
 
         case 'error':
@@ -149,6 +230,14 @@ export const useCopilotStore = defineStore('copilot', {
         this.optimizedPrompt = data.optimizedPrompt;
         this.originalPrompt = data.originalPrompt;
         this.optimizationStatus = 'done';
+        const version = this.promptHistory.length + 1;
+        this.promptHistory.push({
+          prompt: data.optimizedPrompt,
+          label: `v${version} · Optimized`,
+          timestamp: new Date().toISOString(),
+          passRate: null, // will be filled after re-run
+          failures: this.failures,
+        });
       } catch (err) {
         this.optimizationStatus = 'error';
         this.optimizationError = err.response?.data?.message || err.message || 'Optimization failed';

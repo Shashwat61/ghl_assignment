@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import AgentList from '../views/AgentList.vue';
 import Dashboard from '../views/Dashboard.vue';
 import ResultView from '../views/ResultView.vue';
+import PromptHistory from '../views/PromptHistory.vue';
 
 const routes = [
   {
@@ -18,6 +19,11 @@ const routes = [
     path: '/result',
     name: 'result',
     component: ResultView,
+  },
+  {
+    path: '/prompts',
+    name: 'prompts',
+    component: PromptHistory,
   },
 ];
 

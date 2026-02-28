@@ -78,3 +78,69 @@
 **Decision:** Use TypeScript with Express, compiled via ts-node for dev and tsc for production.
 **Tradeoff/Reasoning:** Type safety improves reliability; better IDE support; minor added build complexity offset by developer experience gains.
 **Impact:** All server files use `.ts` extension; added `typescript`, `ts-node`, `@types/*` packages; `tsconfig.json` added to project root.
+
+---
+
+## 2026-02-28 Decision: Validation Flywheel Architecture (Phase 1 Fix + Phase 2 Harden)
+
+**Context:** The original flow was one-shot: generate test cases → run → show failures → manual "Optimize Prompt" button. This was inefficient: the user had to manually trigger optimization, and re-run would generate entirely new test cases (not re-validate the original failing ones).
+
+**Decision:** Replace the manual optimize button with a full automated flywheel driven by a single `/api/flywheel` SSE endpoint:
+- **Phase 1 (Fix Loop):** Generate test cases once → run → if failures → optimize prompt → push to HL → re-run ONLY the previously failing cases → repeat up to `MAX_OPTIMIZE_ATTEMPTS` (default 3)
+- **Phase 2 (Harden Loop):** Once all original failures fixed → generate fresh test cases → run → if new failures found → re-enter inner fix loop → else mark as "solid" and repeat up to `MAX_HARDEN_BATCHES` (default 3) batches
+
+**Tradeoff/Reasoning:** The fix loop reuses the exact failing test cases (same scenario, same KPIs) so optimization is validated against the same benchmark — not a different randomly-generated scenario. The harden loop stress-tests with novel scenarios to prevent overfitting to the fix cases. Auto-pushing each optimized prompt means HL agent is always in sync.
+
+**Impact:**
+- `server/services/simulationEngine.ts` — new `runTestCases()` (no generation, takes existing cases) + `runFlywheel()` (full Phase 1 + Phase 2 orchestration); `runFullSimulation` kept for backward compat
+- `server/routes/simulation.ts` — new `GET /api/flywheel` SSE endpoint
+- `server/config.ts` — added `MAX_OPTIMIZE_ATTEMPTS` (default 3) and `MAX_HARDEN_BATCHES` (default 3) env vars
+- `frontend/src/stores/copilot.js` — added `flywheelPhase`, `flywheelAttempt`, `flywheelTotal` state; handles `phase_change`, `optimize_start`, `optimize_complete` SSE events; prompt history entries auto-created on each `optimize_complete`
+- `frontend/src/views/Dashboard.vue` — connects to `/api/flywheel`; running indicator shows phase/attempt; manual "Optimize Prompt" button removed
+
+---
+
+## 2026-02-28 Decision: Winston Logger + API Middleware Error Handling
+
+**Context:** Backend was using `console.log` with no structured output, no log levels, and no request tracing. Errors in optimize/simulate endpoints were swallowed without useful context.
+
+**Decision:** Add Winston logger with colored console output and level-based routing. Add `apiMiddleware` that attaches a `requestId` to every API request and logs HTTP responses at appropriate levels (error for 5xx, warn for 4xx, info for 2xx). Add `errorHandler` middleware that logs full stack traces with requestId.
+
+**Impact:**
+- `server/logger.ts` — Winston logger with `HH:mm:ss` timestamp, colorize, errors-with-stack format
+- `server/middleware/api.ts` — `apiMiddleware` (requestId + res.on('finish') logging) + `errorHandler` global handler
+- `LOG_LEVEL` env var controls verbosity (default: `debug`)
+
+---
+
+## 2026-02-28 Fix: HL PATCH /voice-ai/agents API — Correct Method, Headers, and Params
+
+**Context:** The optimize endpoint was returning 422 then 403 errors when trying to update the agent system prompt.
+
+**Root Cause 1 (422):** Was using `axios.put` with the full agent body. The correct method is `PATCH` with only `{ agentPrompt: systemPrompt }`.
+
+**Root Cause 2 (403 "LocationId is required"):** Was sending `locationId` in the request body. The API requires `locationId` as a **query parameter**, not in the body.
+
+**Root Cause 3:** Was sending `Version: '2021-07-28'` header. The correct version is `2021-04-15`.
+
+**Fix:** `server/services/hlClient.ts` — `updateAgent()` uses `axios.patch`, sends `{ agentPrompt }` as body, `{ locationId }` as `params`, and `Version: '2021-04-15'` header.
+
+**How discovered:** Used Playwright MCP to navigate to the actual GHL API docs page and read the parameter spec.
+
+---
+
+## 2026-02-28 Fix: SSE KPI Panel Always Showing Last Case Results
+
+**Context:** After simulation completed, the KPI panel always showed the last test case's results (often a passing case), making it look like everything passed even when there were failures.
+
+**Root Cause:** `testcase_start` SSE event was auto-advancing `selectedCaseIndex` on every new case, so at simulation end the selection was always at the last case.
+
+**Fix:** Added `userHasSelected` flag in Dashboard.vue. Auto-advance only happens if the user hasn't manually clicked a case. Once user clicks a card, the selection is locked to their choice.
+
+---
+
+## 2026-02-28 Fix: Transcript Auto-Scroll Not Working
+
+**Root Cause:** `ref="messagesEl"` was on the inner `.messages` div which has no fixed height and therefore no scrollable overflow. The actual scrollable container is the outer `.transcript-viewer` div.
+
+**Fix:** Moved `ref="messagesEl"` to the outer `.transcript-viewer` div. Also added a second `watch(() => props.transcript, scrollToBottom)` to trigger scroll when switching between cases.

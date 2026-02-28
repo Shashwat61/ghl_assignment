@@ -36,7 +36,7 @@ class HLClient {
     if (!session) throw new Error('Not authenticated');
     return {
       Authorization: `Bearer ${session.accessToken}`,
-      Version: '2021-07-28',
+      Version: '2021-04-15',
       'Content-Type': 'application/json',
     };
   }
@@ -122,7 +122,10 @@ class HLClient {
     const body = { agentPrompt: systemPrompt };
     logger.debug('PATCH updateAgent', { url, locationId: this.locationId, bodyKeys: Object.keys(body) });
     try {
-      const response = await axios.patch(url, body, { headers: this.authHeaders });
+      const response = await axios.patch(url, body, {
+        headers: this.authHeaders,
+        params: { locationId: this.locationId },
+      });
       const updated = response.data?.agent || response.data;
       return this.normalizeAgent(updated);
     } catch (err) {

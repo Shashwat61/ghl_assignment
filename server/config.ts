@@ -13,6 +13,8 @@ const envSchema = z.object({
   MAX_TURNS_PER_CASE: z.string().default('15').transform(Number),
   PER_CASE_TIMEOUT_MS: z.string().default('120000').transform(Number),
   SIMULATION_TIMEOUT_MS: z.string().default('660000').transform(Number),
+  MAX_OPTIMIZE_ATTEMPTS: z.string().default('2').transform(Number),
+  MAX_HARDEN_BATCHES: z.string().default('2').transform(Number),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -59,5 +61,7 @@ export const config = {
     maxTurnsPerCase: env.MAX_TURNS_PER_CASE,
     perCaseTimeoutMs: env.PER_CASE_TIMEOUT_MS,
     timeoutMs: env.SIMULATION_TIMEOUT_MS,
+    maxOptimizeAttempts: env.MAX_OPTIMIZE_ATTEMPTS,
+    maxHardenBatches: env.MAX_HARDEN_BATCHES,
   },
 } as const;

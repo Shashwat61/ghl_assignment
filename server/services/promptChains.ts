@@ -141,7 +141,13 @@ const CHAIN2_SYSTEM = `You are roleplaying as a caller interacting with an AI ph
 Stay fully in character as the caller — never break character or acknowledge you are an AI.
 Your messages should sound natural and human: include realistic hesitations, emotions, or follow-up questions.
 Keep responses to 1-3 sentences as a real phone caller would speak.
-Respond with ONLY the caller's spoken words — no stage directions, no JSON, no formatting.`;
+Respond with ONLY the caller's spoken words — no stage directions, no JSON, no formatting.
+
+CRITICAL RULES:
+- If the agent asks for your name, email, or any contact details, provide realistic fictional details (e.g. "Sure, it's Jane Smith" / "jane.smith@gmail.com").
+- If the agent asks a follow-up question, answer it — do not hang up or end the call prematurely.
+- Only say goodbye AFTER the agent has fully wrapped up the call (confirmed your details back, said a closing phrase).
+- Do NOT end the call just because your original question was answered — let the full conversation play out naturally.`;
 
 export async function simulateUserTurn(
   scenario: string,
@@ -162,12 +168,14 @@ ${historyText ? `Conversation so far:\n${historyText}\n\n` : ''}${history.length
 // Chain 3 — Simulate Agent Turn
 // ---------------------------------------------------------------------------
 
+// These phrases must unambiguously signal the agent is CLOSING the call.
+// Do NOT include mid-conversation phrases like "is there anything else" or
+// "we'll be in touch" — agents say those while still collecting info.
 const END_OF_CONVERSATION_PHRASES = [
   'have a great day', 'have a wonderful day', 'have a good day',
-  'goodbye', 'good bye', 'take care', 'thank you for calling',
-  'thanks for calling', 'is there anything else i can help',
-  'is there anything else', 'have a pleasant day', 'farewell',
-  'we look forward to seeing you', "we'll be in touch", 'we will be in touch',
+  'goodbye', 'good bye', 'take care',
+  'have a pleasant day', 'farewell',
+  'we look forward to seeing you',
 ];
 
 export interface AgentTurnResult {
@@ -254,15 +262,20 @@ export interface FailureEntry {
   reasoning: string;
 }
 
+export interface PassEntry {
+  scenario: string;
+  kpi: string;
+}
+
 const CHAIN5_SYSTEM = `You are an expert prompt engineer specializing in voice AI systems.
-Your task is to improve an AI agent's system prompt to fix identified failures.
+Your task is to improve an AI agent's system prompt to fix identified failures WITHOUT breaking passing behaviors.
 The improved prompt must be a complete, drop-in replacement — not a diff or commentary.
-Focus only on fixing the specific failures while preserving what works.
 Output ONLY the improved system prompt text — no preamble, no explanation, no markdown.`;
 
 export async function optimizePrompt(
   originalPrompt: string,
   failures: FailureEntry[],
+  passes: PassEntry[] = [],
 ): Promise<string> {
   const failureList = failures
     .map(
@@ -271,16 +284,26 @@ export async function optimizePrompt(
     )
     .join('\n\n');
 
+  const passList = passes.length > 0
+    ? passes
+        .map((p, i) => `${i + 1}. Scenario: "${p.scenario}"\n   Passing KPI: "${p.kpi}"`)
+        .join('\n\n')
+    : '(none recorded)';
+
   const userMessage = `Original agent system prompt:
 ---
 ${originalPrompt}
 ---
 
-The following KPI failures were identified during testing:
+FAILURES to fix (the prompt must address all of these):
 
 ${failureList}
 
-Rewrite the system prompt to address all these failures. Return ONLY the improved prompt text.`;
+PASSING behaviors to preserve (do NOT regress these):
+
+${passList}
+
+Rewrite the system prompt to fix all failures while keeping all passing behaviors intact. Return ONLY the improved prompt text.`;
 
   return callClaude(CHAIN5_SYSTEM, userMessage, 4096);
 }
