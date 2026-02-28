@@ -3,14 +3,14 @@
   "version": "1.0.0",
   "description": "HighLevel Voice AI Agent Performance Copilot — Validation Flywheel",
   "type": "commonjs",
-  "main": "dist/server/index.js",
+  "main": "dist/index.js",
   "scripts": {
     "setup": "npm install && cd frontend && npm install",
     "dev": "ts-node --project tsconfig.json server/index.ts",
     "build:server": "tsc --project tsconfig.json",
     "build:frontend": "cd frontend && npm run build",
     "build": "npm run build:server && cd frontend && npm install && npm run build",
-    "start": "node dist/server/index.js",
+    "start": "node dist/index.js",
     "demo": "npm run build && npm start"
   },
   "dependencies": {
