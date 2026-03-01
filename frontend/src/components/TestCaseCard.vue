@@ -3,6 +3,9 @@
     <div class="test-case-card__header">
       <span class="case-number">Case {{ index + 1 }}</span>
       <KpiResultBadge v-if="result" :result="result.overall" />
+      <span v-else-if="isEvaluating" class="evaluating-badge">
+        <span class="spinner spinner--amber"></span> Analysing...
+      </span>
       <span v-else-if="isActive" class="running-badge">
         <span class="spinner"></span> Running
         <span class="timer">{{ formattedTime }}</span>
@@ -35,6 +38,7 @@ const props = defineProps({
   index: { type: Number, required: true },
   result: { type: Object, default: null },
   isActive: { type: Boolean, default: false },
+  isEvaluating: { type: Boolean, default: false },
 });
 
 const cardClass = computed(() => ({
@@ -179,6 +183,19 @@ function getKpiIcon(kpi) {
 .pending-badge {
   font-size: 11px;
   color: #475569;
+}
+
+.evaluating-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: #f59e0b;
+}
+
+.spinner--amber {
+  border-color: rgba(245, 158, 11, 0.3);
+  border-top-color: #f59e0b;
 }
 
 .timer {

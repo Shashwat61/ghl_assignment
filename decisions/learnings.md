@@ -224,8 +224,105 @@
 
 ---
 
+## 2026-03-01 Fix: "Analysing..." Status During KPI Evaluation
+
+**Context:** After the conversation ended, the test case card stayed in "Running" state (purple spinner) during the evaluation step (Chain 4 LLM-as-Judge call), which can take 15-30s. The user had no feedback that the evaluation was in progress — it looked like the simulation was still running conversations.
+
+**Fix:**
+- Backend already emits `status: "Evaluating case X..."` before each `evaluateTranscript` call
+- Store now parses that message with a regex (`/Evaluating case (\d+)/`) → sets `evaluatingCaseIndex`
+- `TestCaseCard` gets a new `isEvaluating` prop → shows an amber spinner + "Analysing..." badge
+- `isActive` (purple "Running" badge) is suppressed while `isEvaluating` is true
+- `evaluatingCaseIndex` clears on `evaluated` SSE event
+
+**Impact:** `frontend/src/stores/copilot.js` — `evaluatingCaseIndex` state, parsed from `status` events; `frontend/src/components/TestCaseCard.vue` — `isEvaluating` prop + amber badge + `.evaluating-badge` / `.spinner--amber` styles; `Dashboard.vue` — passes `isEvaluating` and suppresses `isActive` during eval.
+
+---
+
+## 2026-03-01 Feature: Prompt Modal + Inline Diff on Dashboard
+
+**Context:** To see the full active prompt or a diff between original and optimized, users had to navigate to the separate Prompt History page. For demo purposes this breaks flow — better to show both inline on the Dashboard.
+
+**Decision:**
+1. **Prompt modal** — clicking anywhere on the active prompt strip opens a modal with the full prompt text. Strip gets a hover highlight to signal it's clickable.
+2. **"View full" → "View diff"** — the strip's action button shows "View full →" before optimization (opens prompt modal). After optimization completes (2+ versions in history), it changes to "View diff →" and opens an inline diff modal showing original vs latest optimized side-by-side using the existing `PromptDiff` component.
+
+**Impact:** `Dashboard.vue` — `showPromptModal` + `showDiffModal` refs; `openPromptModal()` / `openDiffModal()` functions; `PromptDiff` imported; modal overlay + `.modal`, `.modal--wide`, `.modal-prompt-text`, `.modal-diff` styles added; active-prompt-strip cursor + hover added.
+
+---
+
 ## 2026-02-28 Fix: Transcript Auto-Scroll Not Working
 
 **Root Cause:** `ref="messagesEl"` was on the inner `.messages` div which has no fixed height and therefore no scrollable overflow. The actual scrollable container is the outer `.transcript-viewer` div.
 
 **Fix:** Moved `ref="messagesEl"` to the outer `.transcript-viewer` div. Also added a second `watch(() => props.transcript, scrollToBottom)` to trigger scroll when switching between cases.
+
+---
+
+## 2026-03-01 Fix: Re-run Transcript Cut Short (Optimized Agent Never Finishes)
+
+**Context:** `rerunWithReplay()` only looped `for turn < callerMessages.length` — exactly as many turns as the original run stored. In the original run the conversation ended because the *old* agent said a closing phrase. With the optimized prompt the agent might respond differently mid-stream — and the caller never got to continue past the last stored message. The transcript was cut short right as the new agent was mid-conversation, making evaluation unfair.
+
+**Fix:** Two-phase replay:
+1. **Replay phase** — replay stored caller messages exactly (deterministic A/B comparison)
+2. **Continue phase** — if the agent hasn't closed after all stored messages are replayed, continue with live caller simulation until the agent naturally closes. Gives the optimized agent a complete conversation to be evaluated on.
+
+**Impact:** `simulationEngine.ts` — `rerunWithReplay()` now has a `conversationEnded` flag; Phase 2 live continuation uses `simulateUserTurn` + `isCallerEndingCall` guard.
+
+---
+
+## 2026-03-01 Fix: Conversation Not Stopping When Caller Says Goodbye
+
+**Context:** End-of-conversation detection only checked the **agent's** response. When the caller said "Goodbye" or "I'll see you Saturday", the loop continued — called the agent again, agent responded, only then checked. This caused unnecessary extra turns and agents responding after the caller had clearly ended the call.
+
+**Fix:** Added `isCallerEndingCall()` export in `promptChains.ts`. Called immediately after generating the caller's message in both `runTestCases` and `rerunWithReplay` Phase 2. If the caller ends the call, loop breaks before the agent responds again.
+
+**Caller end phrases include:** "goodbye", "bye", "take care", "I'll see you", "see you Saturday", "I'm hanging up", "that's that", "farewell".
+
+**Impact:** `promptChains.ts` — `CALLER_END_PHRASES` + `isCallerEndingCall()`; `simulationEngine.ts` — caller-end check after each `simulateUserTurn` call.
+
+---
+
+## 2026-03-01 Fix: Chain 4 Evaluator Too Strict (False Failures on Correct Responses)
+
+**Context:** The evaluator (Chain 4) was failing KPIs on technicalities. E.g. agent said "so the team can get back to you" but KPI required "explaining that the details are needed so the team can follow up" — the evaluator rejected this as not explicitly stating purpose, despite the intent being identical.
+
+**Fix:** Updated Chain 4 system prompt to judge **intent and substance**, not exact phrasing. Only fail a KPI if there is clear, concrete evidence the agent did NOT do what was required. Added explicit instruction: "do not fail on technicalities or hairsplitting."
+
+**Impact:** `promptChains.ts` — `CHAIN4_SYSTEM` updated.
+
+---
+
+## 2026-03-01 Fix: Chain 4 JSON Parse Crash on Long Transcripts
+
+**Context:** `evaluateTranscript` was using `max_tokens: 2048`. Long multi-turn conversations produced evaluation responses that exceeded this, getting cut mid-JSON. `extractJSON` failed to parse and crashed after 3 retries.
+
+**Fix:** Increased `max_tokens` for Chain 4 calls from `2048` to `4096`.
+
+**Impact:** `promptChains.ts` — `evaluateTranscript` `retryFn` now uses `4096`.
+
+---
+
+## 2026-03-01 Fix: KPI Checklist Problem ("all four required elements")
+
+**Context:** Chain 1 was generating KPIs like "Agent provides a description of braces including candidacy information and all four required elements for braces." This always failed because the evaluator invented what those "four elements" were and found one missing.
+
+**Fix:** Added explicit rule to Chain 1: KPIs must be simple and broad — do NOT enumerate sub-requirements or checklists within a single KPI. Added BAD/GOOD example showing the checklist anti-pattern.
+
+**Impact:** `promptChains.ts` — Chain 1 KPI rules section updated.
+
+---
+
+## 2026-03-01 Decision: Patch-Based Prompt Optimization (Chain 5)
+
+**Context:** Chain 5 was regenerating the entire agent prompt from scratch (`max_tokens: 4096`). For a typical 500-800 token prompt, this was slow — Claude had to output the full text token by token. The passes list was also bloated (full scenario + KPI entries for every passing KPI).
+
+**Decision:** Switch to a **patch approach**. Chain 5 now outputs a small JSON object:
+```json
+{ "insertions": ["new rule to append"], "replacements": [{"find": "old text", "replace": "new text"}] }
+```
+`applyPatch()` applies replacements first then appends insertions to the original prompt. Output is a complete valid prompt — original text with targeted fixes layered on.
+
+**Why faster:** `max_tokens` dropped from `4096` to `1024` (4× less generation). Input is also smaller — passes list is now a semicolon-joined summary of KPI topics only, not full entries.
+
+**Impact:** `promptChains.ts` — `CHAIN5_SYSTEM` rewritten; `PromptPatch` interface + `applyPatch()` added; `optimizePrompt()` now calls `extractJSON<PromptPatch>` and applies patch to original.

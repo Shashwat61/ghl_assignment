@@ -34,6 +34,7 @@ export const useCopilotStore = defineStore('copilot', {
     flywheelAttempt: 0,
     flywheelTotal: 0,
     flywheelStatusMessage: '',
+    evaluatingCaseIndex: null, // index of case currently being evaluated
 
     // Prompt history (in-memory, per agent session)
     // [{ prompt, label, timestamp, passRate, failures }]
@@ -97,6 +98,7 @@ export const useCopilotStore = defineStore('copilot', {
       this.flywheelAttempt = 0;
       this.flywheelTotal = 0;
       this.flywheelStatusMessage = '';
+      this.evaluatingCaseIndex = null;
       this.promptHistory = [];
     },
 
@@ -134,6 +136,7 @@ export const useCopilotStore = defineStore('copilot', {
 
         case 'evaluated':
           this.results[data.index] = data.evaluation;
+          this.evaluatingCaseIndex = null;
           break;
 
         case 'complete': {
@@ -208,9 +211,15 @@ export const useCopilotStore = defineStore('copilot', {
           break;
         }
 
-        case 'status':
+        case 'status': {
           this.flywheelStatusMessage = data.message;
+          // Detect "Evaluating case X..." to show amber analysing badge
+          const evalMatch = data.message.match(/Evaluating case (\d+)/);
+          if (evalMatch) {
+            this.evaluatingCaseIndex = parseInt(evalMatch[1], 10) - 1;
+          }
           break;
+        }
 
         case 'error':
           this.simulationStatus = 'error';

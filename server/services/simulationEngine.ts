@@ -11,6 +11,7 @@ import {
   generateTestCases,
   simulateUserTurn,
   simulateAgentTurn,
+  isCallerEndingCall,
   evaluateTranscript,
   optimizePrompt,
 } from './promptChains';
@@ -67,11 +68,16 @@ function collectPasses(testCases: TestCase[], results: EvaluationResult[]): Pass
 // Run initial test cases — simulates caller fresh, stores caller messages
 // ---------------------------------------------------------------------------
 
+function checkAbort(signal?: AbortSignal) {
+  if (signal?.aborted) throw new Error('Simulation cancelled — client disconnected');
+}
+
 export async function runTestCases(
   agentPrompt: string,
   testCases: TestCase[],
   onProgress: ProgressCallback,
   indices?: number[],
+  signal?: AbortSignal,
 ): Promise<SimulationResult & { replays: CaseReplay[] }> {
   const results: EvaluationResult[] = [];
   const failures: FailureEntry[] = [];
@@ -83,6 +89,7 @@ export async function runTestCases(
   try {
     for (let i = 0; i < testCases.length; i++) {
       if (timedOut) break;
+      checkAbort(signal);
 
       const testCase = testCases[i];
       const displayIndex = indices ? indices[i] : i;
@@ -98,6 +105,7 @@ export async function runTestCases(
       try {
         for (let turn = 0; turn < config.simulation.maxTurnsPerCase; turn++) {
           if (timedOut || caseTimedOut) break;
+          checkAbort(signal);
 
           const userMessage = await simulateUserTurn(testCase.scenario, history);
           callerMessages.push(userMessage);
@@ -106,6 +114,7 @@ export async function runTestCases(
           transcript.push(userTurn);
           onProgress({ type: 'turn', caseIndex: displayIndex, role: 'user', content: userMessage });
 
+          if (isCallerEndingCall(userMessage)) break;
           if (timedOut || caseTimedOut) break;
 
           const agentResult: AgentTurnResult = await simulateAgentTurn(agentPrompt, history);
@@ -155,33 +164,59 @@ async function rerunWithReplay(
   agentPrompt: string,
   failingReplays: CaseReplay[],
   onProgress: ProgressCallback,
+  signal?: AbortSignal,
 ): Promise<{ results: EvaluationResult[]; failures: FailureEntry[] }> {
   const results: EvaluationResult[] = [];
   const failures: FailureEntry[] = [];
 
   for (const replay of failingReplays) {
+    checkAbort(signal);
     const { testCase, originalIndex, callerMessages } = replay;
     onProgress({ type: 'testcase_start', index: originalIndex, testCase });
 
     const history: ConversationTurn[] = [];
     const transcript: ConversationTurn[] = [];
+    let conversationEnded = false;
 
+    // Phase 1: replay stored caller messages (deterministic — same inputs as original run)
     for (let turn = 0; turn < callerMessages.length; turn++) {
-      // Replay the exact same caller message
       const userMessage = callerMessages[turn];
       const userTurn: ConversationTurn = { role: 'user', content: userMessage };
       history.push(userTurn);
       transcript.push(userTurn);
       onProgress({ type: 'turn', caseIndex: originalIndex, role: 'user', content: userMessage });
 
-      // Get agent response with new prompt
       const agentResult: AgentTurnResult = await simulateAgentTurn(agentPrompt, history);
       const agentTurn: ConversationTurn = { role: 'assistant', content: agentResult.content };
       history.push(agentTurn);
       transcript.push(agentTurn);
       onProgress({ type: 'turn', caseIndex: originalIndex, role: 'assistant', content: agentResult.content });
 
-      if (agentResult.isConversationEnd) break;
+      if (agentResult.isConversationEnd) {
+        conversationEnded = true;
+        break;
+      }
+    }
+
+    // Phase 2: continue with live simulation until agent closes (so optimized agent can finish naturally)
+    if (!conversationEnded) {
+      for (let turn = callerMessages.length; turn < config.simulation.maxTurnsPerCase; turn++) {
+        const userMessage = await simulateUserTurn(testCase.scenario, history);
+        const userTurn: ConversationTurn = { role: 'user', content: userMessage };
+        history.push(userTurn);
+        transcript.push(userTurn);
+        onProgress({ type: 'turn', caseIndex: originalIndex, role: 'user', content: userMessage });
+
+        if (isCallerEndingCall(userMessage)) break;
+
+        const agentResult: AgentTurnResult = await simulateAgentTurn(agentPrompt, history);
+        const agentTurn: ConversationTurn = { role: 'assistant', content: agentResult.content };
+        history.push(agentTurn);
+        transcript.push(agentTurn);
+        onProgress({ type: 'turn', caseIndex: originalIndex, role: 'assistant', content: agentResult.content });
+
+        if (agentResult.isConversationEnd) break;
+      }
     }
 
     onProgress({ type: 'status', message: `Evaluating case ${originalIndex + 1}...` });
@@ -212,17 +247,20 @@ export async function runFlywheel(
   initialPrompt: string,
   onProgress: ProgressCallback,
   pushPrompt: (prompt: string) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<void> {
   const { numTestCases, maxOptimizeAttempts } = config.simulation;
   let currentPrompt = initialPrompt;
 
   // ---- Initial run ----
+  checkAbort(signal);
   onProgress({ type: 'status', message: 'Generating test cases...' });
   const initialCases = await generateTestCases(currentPrompt, numTestCases);
 
   onProgress({ type: 'phase_change', phase: 'fix', attempt: 1, total: maxOptimizeAttempts });
   const initialIndices = initialCases.map((_, i) => i);
-  const initialRun = await runTestCases(currentPrompt, initialCases, onProgress, initialIndices);
+  checkAbort(signal);
+  const initialRun = await runTestCases(currentPrompt, initialCases, onProgress, initialIndices, signal);
 
   const allTestCases = [...initialCases];
   const allResults = [...initialRun.results];
@@ -258,6 +296,7 @@ export async function runFlywheel(
   for (let attempt = 1; attempt <= maxOptimizeAttempts && failures.length > 0; attempt++) {
     logger.info(`Fix loop attempt ${attempt}/${maxOptimizeAttempts} — ${failures.length} failures`);
 
+    checkAbort(signal);
     onProgress({ type: 'optimize_start', attempt });
     const passes = collectPasses(allTestCases, allResults);
     try {
@@ -269,10 +308,11 @@ export async function runFlywheel(
     onProgress({ type: 'optimize_complete', optimizedPrompt: currentPrompt, attempt });
 
     // Re-run with the EXACT same caller messages — fair comparison
+    checkAbort(signal);
     onProgress({ type: 'phase_change', phase: 'fix', attempt: Math.min(attempt + 1, maxOptimizeAttempts), total: maxOptimizeAttempts });
     onProgress({ type: 'status', message: `Re-running ${failingReplays.length} failing case(s) with optimized prompt...` });
 
-    const retryRun = await rerunWithReplay(currentPrompt, failingReplays, onProgress);
+    const retryRun = await rerunWithReplay(currentPrompt, failingReplays, onProgress, signal);
 
     // Merge results back
     failingReplays.forEach((replay, ri) => {

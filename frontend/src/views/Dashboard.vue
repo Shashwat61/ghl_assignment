@@ -61,7 +61,7 @@
       </div>
 
       <!-- Active prompt strip -->
-      <div v-if="store.activePrompt" class="active-prompt-strip">
+      <div v-if="store.activePrompt" class="active-prompt-strip" @click="openPromptModal">
         <div class="active-prompt-strip__label">
           <span class="dot">●</span>
           Active Prompt
@@ -71,10 +71,41 @@
         </div>
         <div class="active-prompt-strip__text">{{ promptPreview }}</div>
         <button
-          v-if="store.promptHistory.length > 0"
           class="active-prompt-strip__link"
-          @click="$router.push('/prompts')"
-        >View full →</button>
+          @click.stop="store.promptHistory.length > 1 ? openDiffModal() : openPromptModal()"
+        >{{ store.promptHistory.length > 1 ? 'View diff →' : 'View full →' }}</button>
+      </div>
+
+      <!-- Prompt modal (full text) -->
+      <div v-if="showPromptModal" class="modal-overlay" @click.self="showPromptModal = false">
+        <div class="modal">
+          <div class="modal-header">
+            <span class="modal-title">
+              Active Prompt
+              <span v-if="store.promptHistory.length > 0" class="prompt-version">
+                {{ store.promptHistory[store.promptHistory.length - 1].label }}
+              </span>
+            </span>
+            <button class="modal-close" @click="showPromptModal = false">✕</button>
+          </div>
+          <pre class="modal-prompt-text">{{ store.activePrompt }}</pre>
+        </div>
+      </div>
+
+      <!-- Diff modal -->
+      <div v-if="showDiffModal" class="modal-overlay" @click.self="showDiffModal = false">
+        <div class="modal modal--wide">
+          <div class="modal-header">
+            <span class="modal-title">Prompt Diff — {{ store.promptHistory[0]?.label }} vs {{ store.promptHistory[store.promptHistory.length - 1]?.label }}</span>
+            <button class="modal-close" @click="showDiffModal = false">✕</button>
+          </div>
+          <div class="modal-diff">
+            <PromptDiff
+              :original="store.promptHistory[0]?.prompt || ''"
+              :optimized="store.promptHistory[store.promptHistory.length - 1]?.prompt || ''"
+            />
+          </div>
+        </div>
       </div>
 
       <!-- Timeout banner -->
@@ -107,7 +138,8 @@
                 :testCase="tc"
                 :index="i"
                 :result="store.results[i] || null"
-                :isActive="activeCase === i"
+                :isActive="activeCase === i && store.evaluatingCaseIndex !== i"
+                :isEvaluating="store.evaluatingCaseIndex === i"
                 @click="selectCase(i)"
               />
             </div>
@@ -172,6 +204,7 @@ import { ref, computed, watch, nextTick } from 'vue';
 import TestCaseCard from '../components/TestCaseCard.vue';
 import TranscriptViewer from '../components/TranscriptViewer.vue';
 import KpiResultBadge from '../components/KpiResultBadge.vue';
+import PromptDiff from '../components/PromptDiff.vue';
 import { useCopilotStore } from '../stores/copilot.js';
 
 const store = useCopilotStore();
@@ -179,6 +212,11 @@ const activeCase = ref(null);
 const selectedCaseIndex = ref(null);
 const userHasSelected = ref(false);
 const testCasesListEl = ref(null);
+const showPromptModal = ref(false);
+const showDiffModal = ref(false);
+
+function openPromptModal() { showPromptModal.value = true; }
+function openDiffModal() { showDiffModal.value = true; }
 
 const selectedResult = computed(() =>
   selectedCaseIndex.value !== null ? store.results[selectedCaseIndex.value] || null : null,
@@ -399,6 +437,87 @@ function runSimulation() {
   border-radius: 8px;
   margin-bottom: 4px;
   min-width: 0;
+  cursor: pointer;
+}
+
+.active-prompt-strip:hover {
+  border-color: #7c3aed;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.modal {
+  background: #1a1d2e;
+  border: 1px solid #2d3348;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 680px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.modal--wide {
+  max-width: 1000px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #2d3348;
+  flex-shrink: 0;
+}
+
+.modal-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: #64748b;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px;
+  line-height: 1;
+}
+
+.modal-close:hover {
+  color: #e2e8f0;
+}
+
+.modal-prompt-text {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 20px;
+  margin: 0;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.modal-diff {
+  overflow-y: auto;
+  flex: 1;
 }
 
 .active-prompt-strip__label {

@@ -5,24 +5,73 @@
 
 ---
 
-## 0. Before You Hit Record
+## How the System Works (Read This First)
 
-- HL sandbox sub-account open, Voice AI Optimizer visible in left sidebar
-- Agent selected has a system prompt with some gaps (so the flywheel actually finds failures)
-- Railway deployment is live and healthy
+### The Problem It Solves
+Voice AI agents in HighLevel run on system prompts. Writing a good prompt is hard — you don't know if it'll handle edge cases until it fails in production. This app automates the entire test-optimize loop: it finds failures in the prompt, fixes them, validates the fix, and pushes the improved version to HighLevel — all without manual intervention.
+
+### The 5 Claude Chains (LLM-as-Judge + More)
+
+| Chain | Role | What Claude Acts As |
+|---|---|---|
+| **Chain 1** | Test case generator | QA architect — reads the agent prompt, generates 2 diverse scenarios with outcome-based KPIs |
+| **Chain 2** | Caller simulator | Roleplay caller — stays in character, gives realistic fictional details, doesn't hang up prematurely |
+| **Chain 3** | Agent simulator | The HL voice agent — uses the actual system prompt as its instructions |
+| **Chain 4** | KPI evaluator | **LLM-as-Judge** — reads the full transcript, scores each KPI pass/fail with one-line reasoning citing specific evidence |
+| **Chain 5** | Prompt optimizer | Senior prompt engineer — outputs a targeted JSON patch (insertions + replacements) to fix failures without breaking passing behaviors |
+
+**LLM-as-Judge (Chain 4)** is the key architectural decision. Instead of writing brittle regex or rule-based checks, the evaluator reads the entire conversation and makes a reasoned judgment on each KPI — the same way a human QA reviewer would.
+
+### The Flywheel Flow
+
+```
+Generate 2 test cases (Chain 1)
+        ↓
+For each case:
+  Caller turn (Chain 2) → Agent turn (Chain 3) → repeat until agent closes call
+        ↓
+Evaluate transcript against KPIs (Chain 4) — LLM-as-Judge
+        ↓
+If failures → Optimize prompt (Chain 5, patch approach) → don't push yet
+        ↓
+Re-run ONLY failing cases with SAME caller messages (deterministic A/B)
+        ↓
+If all pass → Push to HighLevel ✓
+If still failing (attempt 2/2) → Push best version only if it improved
+```
+
+### Key Design Decisions Worth Mentioning
+
+**Deterministic re-runs:** In the initial run, every caller message is stored. On re-run, those exact messages are replayed — only the agent responds with the new prompt. This is a true A/B test: same inputs, different prompt, see if output improves. Without this, a re-run might pass because the simulated caller asked easier questions, not because the optimization worked.
+
+**Push only after passing:** The optimized prompt is never pushed to HL speculatively. It only goes live after the re-run confirms all previously failing cases now pass.
+
+**Patch-based optimization:** Chain 5 outputs a small JSON patch (`insertions` + `replacements`) instead of rewriting the full prompt. This is ~4× faster — output is 200-300 tokens instead of 800-1000.
+
+**Natural conversation ending:** Conversations don't have a fixed turn count. They end when the agent says a closing phrase ("goodbye", "take care", "have a great day") or when the caller explicitly ends the call ("I'll see you then", "goodbye"). Safety cap at 15 turns.
 
 ---
 
-## 1. Open the App Inside HL (~20 sec)
+## Demo Script
+
+### 0. Before You Hit Record
+
+- HL sandbox sub-account open, Voice AI Optimizer visible in left sidebar
+- Have a dental clinic or similar agent selected — one whose prompt has some gaps (so the flywheel finds failures)
+- Server running locally or Railway deployment live
+
+---
+
+### 1. Open the App Inside HL (~20 sec)
 
 **What to do:** Start with the HL sub-account visible. Click **Voice AI Optimizer** in the left sidebar.
 
 **What to say:**
-> "This is the Voice AI Performance Optimizer — a Validation Flywheel that automates the test and optimize phases for HighLevel Voice AI agents. It's embedded natively inside HighLevel using the Marketplace Custom Page module, so it lives right here in the sub-account sidebar — no separate tab needed."
+> "This is the Voice AI Performance Optimizer — a Validation Flywheel that automates the test-and-optimize loop for HighLevel Voice AI agents. It's embedded natively inside HighLevel as a Marketplace Custom Page, so it lives right here in the sub-account sidebar."
 
 ---
 
-## 2. Connect HighLevel via OAuth (~20 sec)
+### 2. Connect HighLevel via OAuth (~20 sec)
 
 **What to do:** Click **Connect HighLevel**. Popup opens, approve it, popup closes. Agent list loads.
 
@@ -30,166 +79,205 @@
 > "Authentication is a real HL OAuth 2.0 flow — the app requests scoped access to the sub-account's Voice AI agents. Once approved, the popup closes automatically and we're connected."
 
 **Under the hood:**
-- Popup opens `/auth` → redirects to HL OAuth consent
-- HL returns an auth code → backend exchanges it for `access_token + refresh_token`
-- Token stored in memory with `locationId`
-- Popup closes itself via `window.close()`
+- Popup → `/auth` → HL OAuth consent page
+- HL returns auth code → backend exchanges for `access_token + refresh_token`
+- Token stored in memory with `locationId`; popup closes via `window.close()`
 
 ---
 
-## 3. Select an Agent (~10 sec)
+### 3. Enter Anthropic API Key (~10 sec)
+
+**What to do:** If the key card is shown, paste in your `sk-ant-` key and click Save.
+
+**What to say:**
+> "The reviewer uses their own Anthropic API key — the app doesn't rely on my credentials, so it keeps working regardless of billing status."
+
+---
+
+### 4. Select an Agent (~10 sec)
 
 **What to do:** Click the agent you want to optimize (e.g. "Dental Clinic Agent").
 
 **What to say:**
-> "Agents are fetched live from HighLevel's Voice AI API. I select the agent whose prompt I want to analyze and optimize."
+> "Agents are fetched live from HighLevel's Voice AI API. I'll select the agent whose prompt I want to analyze and optimize."
 
-**Under the hood:** `GET /voice-ai/agents` → reads the agent's current system prompt from HL
+**Under the hood:** `GET /voice-ai/agents` → reads the agent's current `agentPrompt` field from HL
 
 ---
 
-## 4. Show the Agent's Current Prompt (~15 sec)
+### 5. Show the Active Prompt (~15 sec)
 
-**What to do:** Point to the Active Prompt strip at the top of the Dashboard.
+**What to do:** Point to the **ACTIVE PROMPT** strip at the top of the Dashboard. Click it to open the full prompt modal.
 
 **What to say:**
-> "The agent's current system prompt is shown here. This is what it's currently running in HighLevel. The flywheel will analyze this prompt, find its weaknesses, and automatically fix them."
+> "The agent's current system prompt is shown here — this is what it's running right now in HighLevel. I can click anywhere on this strip to read the full prompt. The flywheel will analyze this prompt, find its weaknesses, and automatically fix them."
+
+**Note:** Strip is clickable — opens a modal with the full prompt text. Button says "View full →" before optimization.
 
 ---
 
-## 5. Start the Flywheel (~10 sec)
+### 6. Start the Flywheel (~10 sec)
 
 **What to do:** Click **▶ Run Simulation**.
 
 **What to say:**
-> "One click kicks off the full validation flywheel. No manual configuration — it reads the prompt directly from HighLevel and runs the full pipeline automatically."
+> "One click kicks off the full validation flywheel. No configuration — it reads the prompt from HighLevel and runs the complete pipeline automatically."
 
 ---
 
-## 6. Phase 1 — Generate Test Cases (~30 sec)
+### 7. Phase 1 — Generate Test Cases (~30 sec)
 
-**What to watch:** Test case cards appear in the left panel with scenarios and KPIs.
+**What to watch:** Header shows **Fix Loop · Attempt 1/2**. Test case cards appear in the left panel with scenarios and KPIs.
 
 **What to say:**
-> "Step one: the flywheel uses Claude as a QA architect to generate 5 diverse test cases from the agent's system prompt. Each test case has a realistic caller scenario — a frustrated patient asking about insurance, someone asking about treatment costs — and 2 to 4 outcome-based KPIs that define what success looks like for that call."
+> "Step one: Claude acts as a senior QA architect. It reads the agent's system prompt and generates 2 diverse test cases — each with a realistic caller scenario and 2-4 outcome-based KPIs that define what success looks like for that call.
 
-**Under the hood (Chain 1):**
-- Claude reads the agent prompt and generates `[{ scenario, kpis[] }]`
-- KPIs are outcome-based: "Agent collects caller name and email before closing" — not format-based like "Agent uses exactly two sentences"
+> The KPIs are outcome-based — they judge what the agent *accomplishes*, not how it phrases things. And they only measure agent behavior, never outcomes that depend on the caller."
 
 ---
 
-## 7. Phase 1 — Simulate Conversations (~45 sec)
+### 8. Phase 1 — Simulate Conversations (~45 sec)
 
 **What to watch:** Transcripts stream in the middle panel, turn by turn, in real time.
 
 **What to say:**
-> "For each test case, two Claude instances have a full multi-turn conversation: one plays the caller, one plays the agent using the actual HighLevel system prompt as its instructions. You can watch every turn stream live.
+> "For each test case, two Claude instances run a full multi-turn conversation. One plays the caller — staying in character, giving realistic fictional details when asked. The other plays the agent using the actual HighLevel system prompt as its instructions.
 
-> The conversation runs naturally until the agent closes the call — says goodbye, confirms contact details, wraps up. No fixed turn count — conversations end the way real calls do."
-
-**Under the hood:**
-- **Chain 2 (User Simulator):** Claude roleplays the caller — gives realistic fictional names/emails when asked, stays in character, only says goodbye after the agent fully wraps up
-- **Chain 3 (Agent Simulator):** Claude uses the actual system prompt as its system message; end-of-call is detected via closing phrases ("goodbye", "take care", "have a great day")
-- Per-case timeout: 2 minutes; safety cap: 15 turns
-
----
-
-## 8. Phase 1 — KPI Evaluation (~20 sec)
-
-**What to watch:** Test case cards flip to PASS (green) or FAIL (red). Click a failing card to see the KPI breakdown in the right panel.
-
-**What to say:**
-> "Once the conversation ends, Claude acts as an objective judge — it reads the full transcript and scores every KPI as pass or fail, with a one-line reasoning citing specific evidence from the conversation.
-
-> Here you can see Case 2 failed — the agent didn't collect the caller's email before closing. That's a real gap in the system prompt."
-
-**Under the hood (Chain 4):**
-- Claude receives transcript + KPI list → returns `{ overall, kpiResults[], summary }`
-- One KPI failure → overall = fail
-
----
-
-## 9. Optimization — Rewriting the Prompt (~20 sec)
-
-**What to watch:** Header shows **"⚙ Optimizing prompt..."**
-
-**What to say:**
-> "Failures found — the flywheel immediately starts optimizing. Claude acts as a senior prompt engineer: it receives the original prompt, the exact failures with their reasoning, and the list of passing KPIs it must not break. It rewrites the complete system prompt to fix every failure while preserving what already works."
+> The conversation runs naturally until the agent closes the call — says goodbye, confirms details, wraps up. No fixed turn count. And if the caller says goodbye first, we stop immediately — we don't keep prompting the agent after the caller has left."
 
 **Under the hood:**
-- **Chain 5 (Prompt Optimizer):** Claude receives `originalPrompt + failures[] + passes[]` → outputs a complete drop-in replacement prompt
-- Not pushed to HL yet — we validate first
+- **Chain 2 (Caller):** Roleplay mode, gives real-sounding names/emails, exits only on natural conversation end
+- **Chain 3 (Agent):** System prompt = the HL agent's actual prompt; closing detected via phrase matching on agent AND caller messages
+- Safety cap: 15 turns, 2-minute per-case timeout
 
 ---
 
-## 10. Re-run the Failing Cases (~30 sec)
+### 9. Phase 1 — KPI Evaluation (LLM-as-Judge) (~20 sec)
 
-**What to watch:** Only the previously failing cases re-run (header: **"Fix Loop · Attempt 2/2"**). Their cards update.
+**What to watch:** When a conversation ends, the test case card switches from purple "Running" to an amber "Analysing..." badge — this is Chain 4 (LLM-as-Judge) evaluating the transcript. Then it flips to PASS (green) or FAIL (red). Click a failing card to see the KPI breakdown.
 
 **What to say:**
-> "Now we re-run only the cases that failed — but here's the key: we replay the exact same caller messages from the first run. The caller says the same things in the same order; only the agent's responses change because it's now using the new prompt. This is a true A/B comparison — same inputs, different prompt."
+> "Once the conversation ends, you'll see the card switch to 'Analysing' — that's Claude acting as an objective judge, reading the full transcript and scoring every KPI pass or fail, with a one-line reasoning citing specific evidence from the conversation. This is LLM-as-Judge: using a language model as a quality evaluator rather than writing brittle rule-based checks.
+
+> Here you can see Case 2 failed — the agent missed something. That's a real gap the optimizer now needs to fix."
+
+**Under the hood (Chain 4 — LLM-as-Judge):**
+- Claude receives: full transcript + KPI list + scenario
+- Returns: `{ overall, kpiResults[{ kpi, result, reasoning }], summary }`
+- One KPI failure → `overall = fail`
+- Evaluates substance and intent, not exact phrasing
 
 ---
 
-## 11. Push to HighLevel — Only After Tests Pass (~10 sec)
+### 10. Optimization — Patch-Based Rewrite (~20 sec)
 
-**What to watch:** Header shows **"⬆ Pushing to HighLevel..."** — only after re-run shows all green.
+**What to watch:** Header shows **⚙ Optimizing prompt...**
 
 **What to say:**
-> "All cases pass with the new prompt — only now does it push to HighLevel. We don't push speculatively; we push a prompt we've validated works against the exact same scenarios that failed before."
+> "Failures found — the flywheel immediately starts optimizing. Claude acts as a senior prompt engineer: it receives the original prompt, the exact failures with their reasoning, and the passing KPIs it must not break.
 
-**Under the hood:**
-- `PATCH /voice-ai/agents/:id` — live HL agent updated only after confirmed pass
+> Instead of rewriting the whole prompt from scratch, it outputs a targeted JSON patch — specific instructions to insert and specific text to replace. This is about 4× faster than full regeneration, and it keeps everything that was already working intact."
+
+**Under the hood (Chain 5 — Patch Optimizer):**
+- Input: original prompt + failures[] + pass topics summary + previous failed attempts (on attempt 2)
+- Output: `{ insertions: [...], replacements: [{find, replace}] }`
+- `applyPatch()` applies replacements then appends insertions to the original
+- `max_tokens: 1024` (was 4096 for full rewrite)
+- Not pushed to HL yet — must validate first
 
 ---
 
-## 11. Phase 2 — Harden Loop (~30 sec)
+### 11. Re-run — Deterministic A/B Comparison (~30 sec)
 
-**What to watch:** Header switches to **"Harden · Batch 1/2"**. New test case cards appear.
+**What to watch:** Only the previously failing cases re-run. Header shows **Fix Loop · Attempt 2/2**.
 
 **What to say:**
-> "Original failures are fixed. Now Phase 2 — the harden loop. We generate a completely fresh batch of test cases and run them against the improved prompt. This prevents overfitting — the optimizer can't have just learned the specific fix cases. If these new scenarios also pass, the prompt is solid."
+> "Now we re-run only the cases that failed — but here's the critical detail: we replay the exact same caller messages from the first run. The caller says the same things in the same order. Only the agent's responses change because it's using the new prompt.
+
+> This is a true A/B comparison: same inputs, different prompt. If it passes now, we know the optimization actually fixed the specific failure — not that we got lucky with an easier caller."
 
 ---
 
-## 12. Show the Results + Prompt History (~30 sec)
+### 12. Push to HighLevel — Only After Tests Pass (~15 sec)
 
-**What to do:** Flywheel completes. Point to the pass rate in the header. Click **📋 Prompt History**.
+**What to watch:** Header shows **⬆ Pushing to HighLevel...** — only appears when the re-run results are all green.
 
 **What to say:**
-> "Flywheel complete. We can see the final pass rate across all test cases. In Prompt History, every version of the prompt is recorded — the original and each optimized version — with their pass rates. Here's the diff: the highlighted additions are the specific instructions the optimizer added to fix the failing KPIs."
+> "All cases pass with the new prompt — only now does it push to HighLevel. We never push speculatively. The improved prompt goes live only after it's been validated against the exact same scenarios that caused the original failures."
+
+**Under the hood:** `PATCH /voice-ai/agents/:id` with `{ agentPrompt: optimizedPrompt }` as body, `{ locationId }` as query param, `Version: 2021-04-15` header.
 
 ---
 
-## 13. Close — What This Solves (~20 sec)
+### 13. Show Results + Diff (~30 sec)
+
+**What to watch:** Header shows **V1 · OPTIMIZED** on the active prompt strip. The strip button now says **"View diff →"**. Click it.
 
 **What to say:**
-> "This closes the full validation loop — from analyzing a prompt to testing it, finding failures, auto-optimizing, and pushing the improved version back to HighLevel — all in one automated run. What would take a prompt engineer hours of manual iteration, this flywheel does in a few minutes."
+> "Flywheel complete. The active prompt is now marked V1 Optimized. I can click anywhere on the prompt strip to read the full prompt — or click 'View diff' to see exactly what the optimizer changed. Green lines are additions, red lines are what was removed. You can see the specific instructions it added to fix the failing KPIs without touching anything that was already working."
 
 ---
 
-## Cheat Sheet — What Shows in the Header
+### 14. Close — What This Solves (~20 sec)
+
+**What to say:**
+> "This closes the full validation loop — from analyzing a prompt, to finding failures, to auto-optimizing, to pushing the validated version back to HighLevel — all in one automated run. What would take a prompt engineer hours of manual iteration, this flywheel does in a few minutes."
+
+---
+
+## Cheat Sheet — Header States
 
 | Header text | What's happening |
 |---|---|
-| Simulating... | Generating test cases |
-| Fix Loop · Attempt 1/2 | Initial 5 conversations running |
-| ⚙ Optimizing prompt... | Claude rewriting the system prompt |
+| Fix Loop · Attempt 1/2 | Initial 2 conversations running |
+| ⚙ Optimizing prompt... | Chain 5 generating patch |
+| Fix Loop · Attempt 2/2 | Re-running the previously failing cases with new prompt |
 | ⬆ Pushing to HighLevel... | PATCH API call updating live HL agent |
-| Fix Loop · Attempt 2/2 | Re-running the previously failing cases |
-| Harden · Batch 1/2 | Fresh test cases stress-testing the improved prompt |
+| ✅ All test cases passed | No failures found — prompt already solid |
+
+## Cheat Sheet — Test Case Card States
+
+| Badge | Color | What's happening |
+|---|---|---|
+| Running + timer | Purple | Conversation in progress (Chain 2 + 3) |
+| Analysing... | Amber | LLM-as-Judge evaluating transcript (Chain 4) |
+| ✓ Pass | Green | All KPIs passed |
+| ✗ Fail | Red | One or more KPIs failed |
+| Pending | Grey | Not yet started |
 
 ---
 
-## What's Real vs Simulated (Per PDF Requirement)
+## What's Real vs Simulated
 
 | Feature | Status |
 |---|---|
-| HL OAuth 2.0 | Real — full token exchange |
-| Fetch agents from HL | Real — `GET /voice-ai/agents` |
-| Push optimized prompt to HL | Real — `PATCH /voice-ai/agents/:id` |
-| Test case generation | Real — Claude generates from actual prompt |
-| Conversation simulation | Simulated — two Claude instances roleplay caller + agent (HL doesn't expose real-time call simulation in sandbox — confirmed acceptable per assignment clarifications) |
-| KPI evaluation | Real — Claude-as-judge on full transcripts |
-| Prompt optimization | Real — Claude rewrites targeting actual failures |
+| HL OAuth 2.0 | **Real** — full token exchange |
+| Fetch agents from HL | **Real** — `GET /voice-ai/agents` |
+| Push optimized prompt to HL | **Real** — `PATCH /voice-ai/agents/:id` |
+| Test case generation | **Real** — Chain 1, Claude reads actual prompt |
+| Conversation simulation | **Simulated** — two Claude instances roleplay caller + agent (HL doesn't expose real-time call simulation in sandbox — confirmed acceptable per assignment clarifications) |
+| KPI evaluation (LLM-as-Judge) | **Real** — Chain 4, Claude evaluates full transcripts |
+| Prompt optimization | **Real** — Chain 5, patch targeting actual failures |
+
+---
+
+## Architecture Summary (For Technical Questions)
+
+```
+Frontend (Vue 3 + Pinia)
+  └── SSE connection to GET /api/flywheel
+  └── Events stream in real-time: testcase_start, turn, evaluated, optimize_start, optimize_complete, push_start, push_complete, complete
+
+Backend (Express + TypeScript)
+  └── simulationEngine.ts — orchestrates the flywheel
+  └── promptChains.ts — 5 Claude chains
+  └── hlClient.ts — HighLevel API calls (OAuth, fetch agents, patch agent)
+  └── sessionStore.ts — in-memory token + Anthropic key storage
+
+Claude Chains
+  Chain 1: QA Architect → test cases JSON
+  Chain 2: Caller roleplay → spoken message
+  Chain 3: Agent roleplay → spoken response + isConversationEnd flag
+  Chain 4: LLM-as-Judge → { overall, kpiResults[], summary }
+  Chain 5: Patch engineer → { insertions[], replacements[] }
+```

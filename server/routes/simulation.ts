@@ -165,11 +165,15 @@ router.get(
       if (typeof (res as any).flush === 'function') (res as any).flush();
     };
 
-    let clientConnected = true;
-    const heartbeat = setInterval(() => res.write(': ping\n\n'), 15_000);
+    const controller = new AbortController();
+    // Send a real SSE event every 10s — comment pings are ignored by some proxies (Railway)
+    const heartbeat = setInterval(() => {
+      res.write('event: ping\ndata: {}\n\n');
+      if (typeof (res as any).flush === 'function') (res as any).flush();
+    }, 10_000);
     const cleanup = () => {
       clearInterval(heartbeat);
-      clientConnected = false;
+      controller.abort(); // cancel in-flight flywheel immediately on disconnect
     };
     req.on('close', cleanup);
 
@@ -190,9 +194,13 @@ router.get(
         logger.info(`Prompt pushed to HL agent ${agentId}`);
       };
 
-      await runFlywheel(agentId, initialPrompt, onProgress, pushPrompt);
-      logger.info(`Flywheel complete — clientConnected: ${clientConnected}`);
+      await runFlywheel(agentId, initialPrompt, onProgress, pushPrompt, controller.signal);
+      logger.info(`Flywheel complete — client connected: ${!controller.signal.aborted}`);
     } catch (err) {
+      if (controller.signal.aborted) {
+        logger.info('Flywheel cancelled — client disconnected', { agentId });
+        return; // don't write to a closed response
+      }
       logger.error('Flywheel failed', { agentId, error: err instanceof Error ? err.stack : err });
       const message = err instanceof Error ? err.message : 'Flywheel failed';
       sendEvent('error', { message });

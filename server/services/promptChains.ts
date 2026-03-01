@@ -67,17 +67,37 @@ async function extractJSON<T>(text: string, retryFn: () => Promise<string>, retr
   }
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function callWithRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const is429 = err?.status === 429 || err?.message?.includes('rate_limit');
+      if (is429 && attempt < retries - 1) {
+        const wait = (attempt + 1) * 20_000; // 20s, 40s backoff
+        logger.warn(`Rate limited by Anthropic — waiting ${wait / 1000}s before retry ${attempt + 1}/${retries - 1}`);
+        await sleep(wait);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('callWithRetry exhausted');
+}
+
 async function callClaude(
   systemPrompt: string,
   userMessage: string,
   maxTokens = 2048,
 ): Promise<string> {
-  const response = await getClient().messages.create({
+  const response = await callWithRetry(() => getClient().messages.create({
     model: config.anthropic.model,
     max_tokens: maxTokens,
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
-  });
+  }));
 
   const block = response.content[0];
   if (block.type !== 'text') throw new Error('Unexpected response type from Claude');
@@ -89,12 +109,12 @@ async function callClaudeWithHistory(
   messages: Anthropic.MessageParam[],
   maxTokens = 1024,
 ): Promise<string> {
-  const response = await getClient().messages.create({
+  const response = await callWithRetry(() => getClient().messages.create({
     model: config.anthropic.model,
     max_tokens: maxTokens,
     system: systemPrompt,
     messages,
-  });
+  }));
 
   const block = response.content[0];
   if (block.type !== 'text') throw new Error('Unexpected response type from Claude');
@@ -131,7 +151,14 @@ IMPORTANT KPI rules:
 - KPIs must be OUTCOME-based, not FORMAT-based. Judge WHAT the agent accomplishes, not HOW it phrases things.
 - BAD KPI: "Agent uses exactly two sentences to handle pricing questions"
 - GOOD KPI: "Agent acknowledges the pricing question and offers to connect the caller with the right person"
-- KPIs should be clearly pass/fail based on conversation content — avoid subjective or overly specific wording requirements.
+- KPIs must only evaluate AGENT behavior — never require outcomes that depend on the caller's cooperation.
+- BAD KPI: "Agent collects both name and email before the call ends" (caller may refuse and hang up — agent can't control this)
+- GOOD KPI: "Agent makes at least one clear attempt to collect name and email"
+- KPIs must be simple and broad — do NOT enumerate sub-requirements or checklists within a single KPI.
+- BAD KPI: "Agent provides a description of braces including candidacy information and all four required elements" (invents a checklist — evaluator will always find something missing)
+- GOOD KPI: "Agent provides a substantive description of braces that goes beyond a generic tagline"
+- Do NOT add phrasing sub-requirements (e.g. "explaining that details are needed so the team can follow up") — judge intent, not exact words.
+- If a scenario involves a caller who refuses or is uncooperative, KPIs should test how the agent HANDLES the refusal, not whether the agent ultimately succeeds despite it.
 
 Example format:
 [
@@ -190,7 +217,21 @@ const END_OF_CONVERSATION_PHRASES = [
   'goodbye', 'good bye', 'take care',
   'have a pleasant day', 'farewell',
   'we look forward to seeing you',
+  "i'll see you", "see you saturday", "see you then", "see you soon",
+  "that's that", "i'm hanging up", "hanging up now",
 ];
+
+// Phrases in the CALLER's message that signal they are ending the call
+const CALLER_END_PHRASES = [
+  'goodbye', 'good bye', 'bye', 'take care',
+  "i'm hanging up", "hanging up", "i'll see you", "see you saturday",
+  "see you then", "see you soon", "that's that", "farewell",
+];
+
+export function isCallerEndingCall(callerMessage: string): boolean {
+  const lower = callerMessage.toLowerCase();
+  return CALLER_END_PHRASES.some((phrase) => lower.includes(phrase));
+}
 
 export interface AgentTurnResult {
   content: string;
@@ -221,7 +262,9 @@ export async function simulateAgentTurn(
 
 const CHAIN4_SYSTEM = `You are an objective QA evaluator for voice AI systems.
 Your task is to evaluate a conversation transcript against specific KPIs.
-Be rigorous but fair — judge based on the actual conversation content.
+Be fair and reasonable — judge the INTENT and substance of what was said, not exact wording.
+If the agent's response clearly satisfies the spirit of a KPI, mark it pass even if the phrasing differs from the KPI wording.
+Only fail a KPI if there is clear, concrete evidence the agent did NOT do what was required — do not fail on technicalities or hairsplitting.
 A single KPI failure means overall = "fail".
 Respond ONLY with valid JSON — no preamble, no markdown fences, no explanation.`;
 
@@ -261,7 +304,7 @@ JSON format:
   "summary": "..."
 }`;
 
-  const retryFn = () => callClaude(CHAIN4_SYSTEM, userMessage, 2048);
+  const retryFn = () => callClaude(CHAIN4_SYSTEM, userMessage, 4096);
   const rawText = await retryFn();
   return extractJSON<EvaluationResult>(rawText, retryFn);
 }
@@ -282,13 +325,36 @@ export interface PassEntry {
 }
 
 const CHAIN5_SYSTEM = `You are an expert prompt engineer specializing in voice AI systems.
-Your task is to improve an AI agent's system prompt to fix identified failures WITHOUT breaking passing behaviors.
-The improved prompt must be a complete, drop-in replacement — not a diff or commentary.
-Output ONLY the improved system prompt text — no preamble, no explanation, no markdown.`;
+Your task is to fix specific failures in an AI agent's system prompt by outputting a minimal JSON patch.
+
+Output ONLY a JSON object with these fields:
+- "insertions": array of short instruction strings to append to the prompt (use this for new rules/behaviors to add)
+- "replacements": array of {"find": "exact text in original", "replace": "new text"} objects (use this to fix existing instructions)
+
+Keep insertions concise — one clear instruction per item. Do not rewrite sections that are already working.
+Respond ONLY with valid JSON — no preamble, no markdown fences, no explanation.`;
 
 export interface PreviousAttempt {
   prompt: string;
   failures: FailureEntry[];
+}
+
+interface PromptPatch {
+  insertions: string[];
+  replacements: { find: string; replace: string }[];
+}
+
+function applyPatch(original: string, patch: PromptPatch): string {
+  let result = original;
+  for (const { find, replace } of patch.replacements) {
+    if (result.includes(find)) {
+      result = result.replace(find, replace);
+    }
+  }
+  if (patch.insertions.length > 0) {
+    result = result.trimEnd() + '\n\n' + patch.insertions.join('\n');
+  }
+  return result;
 }
 
 export async function optimizePrompt(
@@ -304,36 +370,37 @@ export async function optimizePrompt(
     )
     .join('\n\n');
 
-  const passList = passes.length > 0
-    ? passes
-        .map((p, i) => `${i + 1}. Scenario: "${p.scenario}"\n   Passing KPI: "${p.kpi}"`)
-        .join('\n\n')
-    : '(none recorded)';
-
-  const previousAttemptsSection = previousAttempts.length > 0
-    ? `\nPREVIOUS OPTIMIZATION ATTEMPTS THAT STILL FAILED (do not repeat the same approach):\n\n` +
-      previousAttempts.map((a, i) => {
-        const prevFailureList = a.failures
-          .map((f) => `   - KPI: "${f.kpi}" — ${f.reasoning}`)
-          .join('\n');
-        return `Attempt ${i + 1} prompt (excerpt — first 300 chars):\n"${a.prompt.slice(0, 300)}..."\nStill failed:\n${prevFailureList}`;
-      }).join('\n\n') + '\n'
+  // Only include passing KPI topics (not full entries) to keep input short
+  const passTopics = passes.length > 0
+    ? `Passing behaviors to preserve (do not regress): ${[...new Set(passes.map(p => p.kpi))].join('; ')}`
     : '';
 
-  const userMessage = `Original agent system prompt:
+  const previousAttemptsSection = previousAttempts.length > 0
+    ? `\nPREVIOUS PATCHES THAT DID NOT FIX THE FAILURES (try a different approach):\n` +
+      previousAttempts.map((a, i) => {
+        const prevFailureList = a.failures
+          .map((f) => `   - "${f.kpi}" — ${f.reasoning}`)
+          .join('\n');
+        return `Attempt ${i + 1} still failed:\n${prevFailureList}`;
+      }).join('\n') + '\n'
+    : '';
+
+  const userMessage = `Agent system prompt:
 ---
 ${originalPrompt}
 ---
 ${previousAttemptsSection}
-FAILURES to fix (the prompt must address all of these):
+FAILURES to fix:
 
 ${failureList}
 
-PASSING behaviors to preserve (do NOT regress these):
+${passTopics}
 
-${passList}
+Output a JSON patch to fix all failures. Use "insertions" to add new rules, "replacements" to fix existing ones.`;
 
-Rewrite the system prompt to fix all failures while keeping all passing behaviors intact. Return ONLY the improved prompt text.`;
+  const retryFn = () => callClaude(CHAIN5_SYSTEM, userMessage, 1024);
+  const rawText = await retryFn();
+  const patch = await extractJSON<PromptPatch>(rawText, retryFn);
 
-  return callClaude(CHAIN5_SYSTEM, userMessage, 4096);
+  return applyPatch(originalPrompt, patch);
 }
