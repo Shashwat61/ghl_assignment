@@ -85,7 +85,7 @@ Generate 2 test cases (Chain 1)
 ### Step 1 — Install the Marketplace App
 
 1. Open this install link in your browser (log in to HighLevel if prompted):
-   `https://marketplace.gohighlevel.com/oauth/chooselocation?response_type=code&redirect_uri=https%3A%2F%2Fghlassignment-production.up.railway.app%2Fredirect&client_id=69a04ea04cec9149c3512b09-mm3ipmsa&scope=conversations.readonly+conversations.write+conversations%2Fmessage.readonly+conversations%2Fmessage.write+conversations%2Freports.readonly+conversations%2Flivechat.write+voice-ai-dashboard.readonly+voice-ai-agents.readonly+voice-ai-agents.write+voice-ai-agent-goals.readonly+voice-ai-agent-goals.write&version_id=69a04ea04cec9149c3512b09`
+   [Install Voice AI Optimizer](https://marketplace.gohighlevel.com/oauth/chooselocation?response_type=code&redirect_uri=https%3A%2F%2Fghlassignment-production.up.railway.app%2Fredirect&client_id=69a04ea04cec9149c3512b09-mm3ipmsa&scope=conversations.readonly+conversations.write+conversations%2Fmessage.readonly+conversations%2Fmessage.write+conversations%2Freports.readonly+conversations%2Flivechat.write+voice-ai-dashboard.readonly+voice-ai-agents.readonly+voice-ai-agents.write+voice-ai-agent-goals.readonly+voice-ai-agent-goals.write&version_id=69a04ea04cec9149c3512b09)
 2. Select a sub-account to install to and click **Install**. You will be redirected — that's expected.
 3. Navigate to `app.gohighlevel.com` → your sub-account. **Voice AI Optimizer** will appear at the bottom of the left sidebar.
 
