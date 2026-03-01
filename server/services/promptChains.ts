@@ -1,8 +1,15 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config } from '../config';
 import { logger } from '../logger';
+import { sessionStore } from './sessionStore';
 
-const anthropic = new Anthropic({ apiKey: config.anthropic.apiKey });
+function getClient(): Anthropic {
+  const apiKey = sessionStore.getAnthropicApiKey();
+  if (!apiKey) {
+    throw new Error('No Anthropic API key set. Please enter your API key in the app settings.');
+  }
+  return new Anthropic({ apiKey });
+}
 
 export interface TestCase {
   scenario: string;
@@ -65,7 +72,7 @@ async function callClaude(
   userMessage: string,
   maxTokens = 2048,
 ): Promise<string> {
-  const response = await anthropic.messages.create({
+  const response = await getClient().messages.create({
     model: config.anthropic.model,
     max_tokens: maxTokens,
     system: systemPrompt,
@@ -82,7 +89,7 @@ async function callClaudeWithHistory(
   messages: Anthropic.MessageParam[],
   maxTokens = 1024,
 ): Promise<string> {
-  const response = await anthropic.messages.create({
+  const response = await getClient().messages.create({
     model: config.anthropic.model,
     max_tokens: maxTokens,
     system: systemPrompt,

@@ -9,6 +9,7 @@ export interface Session {
 
 class SessionStore {
   private session: Session | null = null;
+  private _anthropicApiKey: string | null = null;
 
   set(session: Session): void {
     this.session = session;
@@ -26,6 +27,14 @@ class SessionStore {
     if (!this.session) return false;
     // 60s buffer before expiry
     return Date.now() < this.session.expiresAt - 60_000;
+  }
+
+  setAnthropicApiKey(key: string): void {
+    this._anthropicApiKey = key;
+  }
+
+  getAnthropicApiKey(): string | null {
+    return this._anthropicApiKey;
   }
 }
 

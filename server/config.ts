@@ -7,7 +7,7 @@ const envSchema = z.object({
   HL_CLIENT_ID: z.string().min(1, 'HL_CLIENT_ID is required'),
   HL_CLIENT_SECRET: z.string().min(1, 'HL_CLIENT_SECRET is required'),
   HL_REDIRECT_URI: z.string().default('http://localhost:3000/redirect'),
-  ANTHROPIC_API_KEY: z.string().min(1, 'ANTHROPIC_API_KEY is required'),
+  ANTHROPIC_API_KEY: z.string().default(''),
   SESSION_SECRET: z.string().default('dev-secret'),
   NUM_TEST_CASES: z.string().default('2').transform(Number),
   MAX_TURNS_PER_CASE: z.string().default('15').transform(Number),
