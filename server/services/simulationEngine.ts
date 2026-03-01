@@ -152,7 +152,8 @@ export async function runFlywheel(
   const initialCases = await generateTestCases(currentPrompt, numTestCases);
   allTestCases = [...initialCases];
 
-  onProgress({ type: 'phase_change', phase: 'fix', attempt: 1, total: maxOptimizeAttempts });
+  const totalRounds = maxOptimizeAttempts + 1;
+  onProgress({ type: 'phase_change', phase: 'fix', attempt: 1, total: totalRounds });
   let { results, failures } = await runTestCases(currentPrompt, initialCases, onProgress, 0);
   allResults = [...results];
 
@@ -199,7 +200,7 @@ export async function runFlywheel(
 
     if (failingCases.length === 0) break;
 
-    onProgress({ type: 'phase_change', phase: 'fix', attempt: attempt + 1, total: maxOptimizeAttempts });
+    onProgress({ type: 'phase_change', phase: 'fix', attempt: attempt + 1, total: totalRounds });
     onProgress({ type: 'status', message: `Re-running ${failingCases.length} previously failing case(s)...` });
 
     // Re-run only the failing cases, mapped back to their original indices
@@ -220,6 +221,10 @@ export async function runFlywheel(
     if (failures.length === 0) {
       onProgress({ type: 'status', message: `All previously failing cases now pass after attempt ${attempt}!` });
     }
+  }
+
+  if (failures.length > 0) {
+    onProgress({ type: 'status', message: `Fix loop exhausted (${maxOptimizeAttempts} attempts) — ${failures.length} case(s) still failing. Moving on with best prompt so far.` });
   }
 
   // ---- Phase 2: Harden loop ----

@@ -107,63 +107,27 @@ Phase 2 — Harden Loop (up to 2 batches):
 - HighLevel agency account with Marketplace developer access
 - A Voice AI agent already created in HL with a system prompt
 
-### Step 1 — Install the Widget via Custom JS
+### Step 1 — Install the App via HL Marketplace
 
-In HighLevel, go to:
-**Settings → Custom JS/CSS** (at the sub-account level)
+The app is integrated into HighLevel natively using the **Custom Page** module in the HL Marketplace — this adds **Voice AI Optimizer** as a menu item in the sub-account's left sidebar.
 
-Paste the following script and click **Save**:
-
-```js
-(function () {
-  var APP_URL = 'https://ghlassignment-production.up.railway.app';
-
-  // Sidebar panel
-  var sidebar = document.createElement('div');
-  sidebar.id = 'ghl-copilot-sidebar';
-  sidebar.style.cssText = [
-    'position:fixed', 'top:0', 'right:-440px', 'width:440px',
-    'height:100vh', 'background:#0f1117', 'border-left:1px solid #2d3348',
-    'z-index:99999', 'transition:right 0.3s ease',
-    'box-shadow:-4px 0 24px rgba(0,0,0,0.5)', 'display:flex', 'flex-direction:column'
-  ].join(';');
-
-  var iframe = document.createElement('iframe');
-  iframe.src = APP_URL;
-  iframe.allow = 'same-origin';
-  iframe.style.cssText = 'width:100%;height:100%;border:none;flex:1;';
-  sidebar.appendChild(iframe);
-
-  // Toggle button
-  var btn = document.createElement('button');
-  btn.innerHTML = '&#9889; Voice AI Copilot';
-  btn.style.cssText = [
-    'position:fixed', 'bottom:24px', 'right:24px', 'z-index:99999',
-    'background:#7c3aed', 'color:white', 'border:none', 'border-radius:24px',
-    'padding:12px 20px', 'font-size:14px', 'font-weight:600', 'cursor:pointer',
-    'box-shadow:0 4px 16px rgba(124,58,237,0.4)', 'transition:all 0.2s ease',
-    'font-family:inherit'
-  ].join(';');
-
-  var isOpen = false;
-  btn.addEventListener('click', function () {
-    isOpen = !isOpen;
-    sidebar.style.right = isOpen ? '0' : '-440px';
-    btn.style.right = isOpen ? '456px' : '24px';
-    btn.innerHTML = isOpen ? '&#10005; Close' : '&#9889; Voice AI Copilot';
-  });
-
-  document.body.appendChild(sidebar);
-  document.body.appendChild(btn);
-})();
-```
+1. Go to `marketplace.gohighlevel.com` → **My Apps** → open **voice ai optimizer**
+2. Go to **Modules → Custom Page → + New custom page**
+3. Fill in:
+   - **Title:** `Voice AI Optimizer`
+   - **Placement:** `Left menu navigation`
+   - **Visible on:** `Sub-account Left Navigation Menu`
+   - **Live URL:** `https://ghlassignment-production.up.railway.app`
+   - **Testing URL:** `https://ghlassignment-production.up.railway.app`
+4. Click **Save**
+5. Install the app on your sub-account via **Advanced Settings → Auth → Install Link**
+6. Navigate to your sub-account — **Voice AI Optimizer** appears in the left sidebar
 
 ### Step 2 — Connect Your HighLevel Account
 
-1. Click the **⚡ Voice AI Copilot** button (bottom-right of any HL page)
-2. Click **"Connect HighLevel"** inside the sidebar
-3. Complete the OAuth consent screen — select your sub-account
-4. You'll be redirected back with **"Connected"** status shown
+1. Click **Voice AI Optimizer** in the left sidebar of your sub-account
+2. Click **"Connect HighLevel"** — completes OAuth in a popup
+3. After the popup closes, agents load automatically
 
 ### Step 3 — Run the Validation Flywheel
 
