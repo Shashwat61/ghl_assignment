@@ -63,7 +63,7 @@ export async function runTestCases(
   agentPrompt: string,
   testCases: TestCase[],
   onProgress: ProgressCallback,
-  indexOffset = 0,
+  indices?: number[],
 ): Promise<SimulationResult> {
   const results: EvaluationResult[] = [];
   const failures: FailureEntry[] = [];
@@ -76,7 +76,7 @@ export async function runTestCases(
       if (timedOut) break;
 
       const testCase = testCases[i];
-      const displayIndex = indexOffset + i;
+      const displayIndex = indices ? indices[i] : i;
       onProgress({ type: 'testcase_start', index: displayIndex, testCase });
 
       const history: ConversationTurn[] = [];
@@ -155,7 +155,8 @@ export async function runFlywheel(
   allTestCases = [...initialCases];
 
   onProgress({ type: 'phase_change', phase: 'fix', attempt: 1, total: maxOptimizeAttempts });
-  let { results, failures } = await runTestCases(currentPrompt, initialCases, onProgress, 0);
+  const initialIndices = initialCases.map((_, i) => i);
+  let { results, failures } = await runTestCases(currentPrompt, initialCases, onProgress, initialIndices);
   allResults = [...results];
 
   // Fix loop — re-run only the failing test cases after each optimize
@@ -205,8 +206,8 @@ export async function runFlywheel(
     onProgress({ type: 'phase_change', phase: 'fix', attempt: Math.min(attempt + 1, maxOptimizeAttempts), total: maxOptimizeAttempts });
     onProgress({ type: 'status', message: `Re-running ${failingCases.length} previously failing case(s) with optimized prompt...` });
 
-    const retryOffset = allTestCases.indexOf(failingCases[0]);
-    const retryResult = await runTestCases(currentPrompt, failingCases, onProgress, retryOffset);
+    const retryIndices = failingCases.map((tc) => allTestCases.indexOf(tc));
+    const retryResult = await runTestCases(currentPrompt, failingCases, onProgress, retryIndices);
 
     failingCases.forEach((tc, ri) => {
       const idx = allTestCases.indexOf(tc);
@@ -261,7 +262,7 @@ export async function runFullSimulation(
   onProgress({ type: 'status', message: 'Generating test cases...' });
   const testCases = await generateTestCases(agentPrompt, numTestCases);
   onProgress({ type: 'status', message: `Generated ${testCases.length} test cases` });
-  return runTestCases(agentPrompt, testCases, onProgress, 0);
+  return runTestCases(agentPrompt, testCases, onProgress, testCases.map((_, i) => i));
 }
 
 export async function generateOptimizedPrompt(
