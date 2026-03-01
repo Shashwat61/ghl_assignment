@@ -10,6 +10,9 @@ import simulationRouter from './routes/simulation';
 
 const app = express();
 
+// Trust Railway's proxy so req.protocol reflects https
+app.set('trust proxy', 1);
+
 // Body parsing
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
