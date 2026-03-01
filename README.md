@@ -62,6 +62,8 @@ Generate 2 test cases (Chain 1)
 - **Patch-based optimization** — Chain 5 outputs `{insertions[], replacements[]}` not a full rewrite (~4× faster)
 - **Abort on disconnect** — `AbortController` cancels all in-flight Claude calls immediately when browser closes/refreshes
 
+> For a deeper dive — pros/cons of every decision, SSE data flow, and what a production-grade version of this would look like — see **[ARCHITECTURE.md](./ARCHITECTURE.md)**.
+
 ---
 
 ## What Is Real vs Simulated
