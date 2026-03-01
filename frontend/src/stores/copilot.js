@@ -25,8 +25,9 @@ export const useCopilotStore = defineStore('copilot', {
     // Optimization
     originalPrompt: '',
     optimizedPrompt: '',
-    optimizationStatus: 'idle', // 'idle' | 'optimizing' | 'done' | 'error'
+    optimizationStatus: 'idle', // 'idle' | 'optimizing' | 'pushing' | 'done' | 'error'
     optimizationError: null,
+    pushSuccess: null, // true | false | null
 
     // Flywheel phase progress
     flywheelPhase: null, // 'fix' | 'harden' | null
@@ -91,6 +92,7 @@ export const useCopilotStore = defineStore('copilot', {
       this.optimizedPrompt = '';
       this.optimizationStatus = 'idle';
       this.optimizationError = null;
+      this.pushSuccess = null;
       this.flywheelPhase = null;
       this.flywheelAttempt = 0;
       this.flywheelTotal = 0;
@@ -178,8 +180,18 @@ export const useCopilotStore = defineStore('copilot', {
           this.flywheelTotal = data.total;
           break;
 
+        case 'push_start':
+          this.optimizationStatus = 'pushing';
+          break;
+
+        case 'push_complete':
+          this.pushSuccess = data.success;
+          this.optimizationStatus = 'done';
+          break;
+
         case 'optimize_start':
           this.optimizationStatus = 'optimizing';
+          this.pushSuccess = null;
           break;
 
         case 'optimize_complete': {

@@ -39,13 +39,14 @@
 
           <div v-else-if="store.simulationStatus === 'running'" class="running-indicator">
             <span class="spinner-large"></span>
-            <span v-if="store.flywheelPhase === 'fix'">
+            <span v-if="store.optimizationStatus === 'pushing'">⬆ Pushing to HighLevel...</span>
+            <span v-else-if="store.optimizationStatus === 'optimizing'">⚙ Optimizing prompt...</span>
+            <span v-else-if="store.flywheelPhase === 'fix'">
               Fix Loop · Attempt {{ store.flywheelAttempt }}/{{ store.flywheelTotal }}
             </span>
             <span v-else-if="store.flywheelPhase === 'harden'">
               Harden · Batch {{ store.flywheelAttempt }}/{{ store.flywheelTotal }}
             </span>
-            <span v-else-if="store.optimizationStatus === 'optimizing'">⚙ Optimizing...</span>
             <span v-else>Simulating...</span>
           </div>
 
@@ -233,7 +234,7 @@ function runSimulation() {
   eventSource = new EventSource(url);
   let completed = false;
 
-  const sseEvents = ['testcase_start', 'turn', 'evaluated', 'phase_change', 'optimize_start', 'optimize_complete', 'status'];
+  const sseEvents = ['testcase_start', 'turn', 'evaluated', 'phase_change', 'optimize_start', 'optimize_complete', 'push_start', 'push_complete', 'status'];
   sseEvents.forEach((eventType) => {
     eventSource.addEventListener(eventType, (e) => {
       const data = JSON.parse(e.data);

@@ -26,6 +26,8 @@ export type SimulationProgressEvent =
   | { type: 'evaluated'; index: number; evaluation: EvaluationResult }
   | { type: 'optimize_start'; attempt: number }
   | { type: 'optimize_complete'; optimizedPrompt: string; attempt: number }
+  | { type: 'push_start' }
+  | { type: 'push_complete'; success: boolean }
   | { type: 'complete'; testCases: TestCase[]; results: EvaluationResult[]; failures: FailureEntry[]; timedOut: boolean; completedCount: number; currentPrompt: string }
   | { type: 'error'; message: string };
 
@@ -190,11 +192,13 @@ export async function runFlywheel(
     logger.debug(`Optimized prompt (attempt ${attempt}):\n` + currentPrompt);
     onProgress({ type: 'optimize_complete', optimizedPrompt: currentPrompt, attempt });
 
+    onProgress({ type: 'push_start' });
     try {
       await pushPrompt(currentPrompt);
+      onProgress({ type: 'push_complete', success: true });
     } catch (err) {
       logger.error(`pushPrompt failed on attempt ${attempt}`, { error: err instanceof Error ? err.stack : err });
-      // Non-fatal — continue with the optimized prompt even if push failed
+      onProgress({ type: 'push_complete', success: false });
     }
 
     if (failingCases.length === 0) break;
@@ -255,10 +259,13 @@ export async function runFlywheel(
             break;
           }
           onProgress({ type: 'optimize_complete', optimizedPrompt: currentPrompt, attempt });
+          onProgress({ type: 'push_start' });
           try {
             await pushPrompt(currentPrompt);
+            onProgress({ type: 'push_complete', success: true });
           } catch (err) {
             logger.error(`pushPrompt failed (harden batch, attempt ${attempt})`, { error: err instanceof Error ? err.stack : err });
+            onProgress({ type: 'push_complete', success: false });
           }
 
           const retryOffset = allTestCases.indexOf(failingCases[0]);
