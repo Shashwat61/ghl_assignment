@@ -189,9 +189,18 @@ function handleSelect(agent) {
   router.push('/dashboard');
 }
 
-onMounted(() => { loadAgents(); checkApiKeyStatus(); });
+onMounted(() => {
+  if (store.isAuthenticated) {
+    loadAgents();
+    checkApiKeyStatus();
+  }
+});
+
 watch(() => store.isAuthenticated, (authed) => {
-  if (authed) loadAgents();
+  if (authed) {
+    loadAgents();
+    checkApiKeyStatus(); // always re-check key status after fresh OAuth
+  }
 });
 </script>
 
