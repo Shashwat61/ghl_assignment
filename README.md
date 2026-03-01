@@ -8,7 +8,7 @@ A **Validation Flywheel** that automates the Test and Optimize phases for HighLe
 
 **Deployed on Railway:** `https://ghlassignment-production.up.railway.app`
 
-Access via the HighLevel Marketplace Custom Page — see [Installation](#installation) below.
+Access via the HighLevel Marketplace Custom Page — see [Installation](#installation--running-inside-highlevel) below.
 
 ---
 
