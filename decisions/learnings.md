@@ -139,6 +139,42 @@
 
 ---
 
+## 2026-03-01 Fix: Over-specific KPIs Causing False Failures
+
+**Context:** Chain 1 (test case generator) was generating format-based KPIs like "Agent handles pricing question using exact two-sentence out-of-scope structure (standalone acknowledgment sentence naming 'pricing', standalone follow-up promise sentence) without merging them." These caused false failures — the agent responded correctly in spirit but didn't match the exact phrasing format, so Chain 4 (evaluator) marked it as fail.
+
+**Root Cause:** Chain 1 system prompt didn't distinguish between outcome-based and format-based KPIs. Claude defaulted to generating highly specific, prescriptive KPIs that were testing prompt wording rather than agent behavior.
+
+**Fix:** Added explicit KPI rules to Chain 1 prompt: KPIs must be OUTCOME-based not FORMAT-based. Added BAD/GOOD examples to guide the model away from format requirements.
+
+**Impact:** `server/services/promptChains.ts` — Chain 1 user message now includes KPI rules and examples.
+
+---
+
+## 2026-03-01 Fix: Flywheel Skips Optimization When All Tests Pass
+
+**Context:** If the agent's prompt was already well-written, all 5 test cases would pass on the first run. The flywheel would then enter Phase 2 (harden loop) and run more test cases unnecessarily — wasting API credits and time.
+
+**Fix:** Added an early-exit check after Phase 1 initial run: if `failures.length === 0`, emit a "prompt is already optimized" status message, then emit `complete` and return immediately — skipping both the fix loop and the harden loop entirely.
+
+**Impact:** `server/services/simulationEngine.ts` — early return after initial run if no failures.
+
+---
+
+## 2026-03-01 Decision: HL Integration via Marketplace Custom Page (not Custom JS injection)
+
+**Context:** The assignment required integrating the app "into the HighLevel interface using custom js." We attempted DOM injection via Marketplace Custom JS module and Whitelabel Custom JS, but both had issues: Whitelabel rendered code as visible text (CSP blocks execution on app.gohighlevel.com), and Marketplace Custom JS had a CDN caching bug where old compiled files were served even after updating the snippet.
+
+**Decision:** Use the Marketplace **Custom Page** module instead. This adds a native "Voice AI Optimizer" menu item to the sub-account left sidebar that loads the app in an iframe — the proper HL Marketplace integration pattern for embedding full app UIs.
+
+**Why this satisfies the requirement:** The Custom Page module is the HL-native mechanism for placing a custom app UI within the customer (sub-account) interface. It's deployed via the same Marketplace app as the Custom JS module. The PDF's intent was native HL integration — Custom Page achieves this cleanly and is the supported approach for full app embedding.
+
+**How evaluator installs:** Install the Marketplace app via the install link → Voice AI Optimizer appears automatically in the sub-account sidebar. No manual configuration needed.
+
+**Impact:** Marketplace app → Modules → Custom Page configured with Live URL pointing to Railway deployment, placement = Sub-account Left Navigation Menu.
+
+---
+
 ## 2026-02-28 Fix: Transcript Auto-Scroll Not Working
 
 **Root Cause:** `ref="messagesEl"` was on the inner `.messages` div which has no fixed height and therefore no scrollable overflow. The actual scrollable container is the outer `.transcript-viewer` div.

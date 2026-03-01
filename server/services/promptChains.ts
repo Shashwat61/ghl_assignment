@@ -118,13 +118,19 @@ Each test case should target a different scenario or edge case.
 
 Return a JSON array with exactly ${numCases} objects, each with:
 - "scenario": A 1-2 sentence description of the caller situation and goal
-- "kpis": An array of 2-4 specific, measurable success criteria strings
+- "kpis": An array of 2-4 outcome-based success criteria strings
+
+IMPORTANT KPI rules:
+- KPIs must be OUTCOME-based, not FORMAT-based. Judge WHAT the agent accomplishes, not HOW it phrases things.
+- BAD KPI: "Agent uses exactly two sentences to handle pricing questions"
+- GOOD KPI: "Agent acknowledges the pricing question and offers to connect the caller with the right person"
+- KPIs should be clearly pass/fail based on conversation content — avoid subjective or overly specific wording requirements.
 
 Example format:
 [
   {
     "scenario": "A frustrated customer calls to cancel their subscription after being charged twice",
-    "kpis": ["Agent acknowledges billing issue within first 2 responses", "Agent offers concrete resolution (refund or credit)", "Agent retains customer or gracefully processes cancellation"]
+    "kpis": ["Agent acknowledges the billing issue", "Agent offers a concrete resolution such as a refund or credit", "Agent handles the cancellation request or escalates appropriately"]
   }
 ]`;
 

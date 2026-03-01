@@ -160,6 +160,21 @@ export async function runFlywheel(
   let failingCases = initialCases.filter((_, i) => results[i]?.overall === 'fail');
   logger.info(`Phase 1 initial run done — results: ${results.length}, failures: ${failures.length}, failingCases: ${failingCases.length}`);
 
+  // If all test cases pass on the first run, prompt is already optimized — skip flywheel
+  if (failures.length === 0) {
+    onProgress({ type: 'status', message: 'All test cases passed — prompt is already optimized!' });
+    onProgress({
+      type: 'complete',
+      testCases: allTestCases,
+      results: allResults,
+      failures: [],
+      timedOut: false,
+      completedCount: allResults.length,
+      currentPrompt,
+    });
+    return;
+  }
+
   for (let attempt = 1; attempt <= maxOptimizeAttempts && failures.length > 0; attempt++) {
     logger.info(`Fix loop attempt ${attempt}/${maxOptimizeAttempts} — ${failures.length} failures`);
 
