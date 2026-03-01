@@ -247,6 +247,11 @@ export async function runFlywheel(
   let failingReplays = initialRun.replays.filter((_, i) => initialRun.results[i]?.overall === 'fail');
   let failures = initialRun.failures;
 
+  // Track best prompt = fewest failures so far (so we never push something worse)
+  let bestPrompt = currentPrompt;
+  let bestFailureCount = failures.length;
+  let everPassed = false;
+
   // ---- Fix loop: optimize → re-run with same caller messages → push only if passing ----
   for (let attempt = 1; attempt <= maxOptimizeAttempts && failures.length > 0; attempt++) {
     logger.info(`Fix loop attempt ${attempt}/${maxOptimizeAttempts} — ${failures.length} failures`);
@@ -277,7 +282,14 @@ export async function runFlywheel(
 
     failures = retryRun.failures;
 
+    // Track best prompt — only update if this attempt improved things
+    if (failures.length < bestFailureCount) {
+      bestPrompt = currentPrompt;
+      bestFailureCount = failures.length;
+    }
+
     if (failures.length === 0) {
+      everPassed = true;
       // All passing — push now
       onProgress({ type: 'status', message: '✅ All test cases pass — pushing optimized prompt to HighLevel...' });
       onProgress({ type: 'push_start' });
@@ -297,16 +309,20 @@ export async function runFlywheel(
     }
   }
 
-  // If still failing after all attempts — push best prompt we have
-  if (failures.length > 0) {
-    onProgress({ type: 'status', message: `Could not fix all cases in ${maxOptimizeAttempts} attempts — pushing best prompt so far.` });
-    onProgress({ type: 'push_start' });
-    try {
-      await pushPrompt(currentPrompt);
-      onProgress({ type: 'push_complete', success: true });
-    } catch (err) {
-      logger.error(`pushPrompt failed (final)`, { error: err instanceof Error ? err.stack : err });
-      onProgress({ type: 'push_complete', success: false });
+  // If never fully passed — only push if we made some improvement over the original
+  if (!everPassed) {
+    if (bestFailureCount < initialRun.failures.length) {
+      onProgress({ type: 'status', message: `Partially improved (${initialRun.failures.length} → ${bestFailureCount} failures) — pushing best prompt.` });
+      onProgress({ type: 'push_start' });
+      try {
+        await pushPrompt(bestPrompt);
+        onProgress({ type: 'push_complete', success: true });
+      } catch (err) {
+        logger.error(`pushPrompt failed (best effort)`, { error: err instanceof Error ? err.stack : err });
+        onProgress({ type: 'push_complete', success: false });
+      }
+    } else {
+      onProgress({ type: 'status', message: `Optimization did not improve results — keeping original prompt in HighLevel.` });
     }
   }
 
