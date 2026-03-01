@@ -152,8 +152,7 @@ export async function runFlywheel(
   const initialCases = await generateTestCases(currentPrompt, numTestCases);
   allTestCases = [...initialCases];
 
-  const totalRounds = maxOptimizeAttempts + 1;
-  onProgress({ type: 'phase_change', phase: 'fix', attempt: 1, total: totalRounds });
+  onProgress({ type: 'phase_change', phase: 'fix', attempt: 1, total: maxOptimizeAttempts });
   let { results, failures } = await runTestCases(currentPrompt, initialCases, onProgress, 0);
   allResults = [...results];
 
@@ -200,7 +199,7 @@ export async function runFlywheel(
 
     if (failingCases.length === 0) break;
 
-    onProgress({ type: 'phase_change', phase: 'fix', attempt: attempt + 1, total: totalRounds });
+    onProgress({ type: 'phase_change', phase: 'fix', attempt: Math.min(attempt + 1, maxOptimizeAttempts), total: maxOptimizeAttempts });
     onProgress({ type: 'status', message: `Re-running ${failingCases.length} previously failing case(s)...` });
 
     // Re-run only the failing cases, mapped back to their original indices
