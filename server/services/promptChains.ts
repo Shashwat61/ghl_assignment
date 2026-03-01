@@ -143,7 +143,8 @@ Example format:
 
   const retryFn = () => callClaude(CHAIN1_SYSTEM, userMessage, 2048);
   const rawText = await retryFn();
-  return extractJSON<TestCase[]>(rawText, retryFn);
+  const cases = await extractJSON<TestCase[]>(rawText, retryFn);
+  return cases.slice(0, numCases);
 }
 
 // ---------------------------------------------------------------------------
