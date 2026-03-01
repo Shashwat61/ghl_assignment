@@ -1,93 +1,179 @@
-# GHL Voice AI Agent Performance Copilot
+# Voice AI Performance Optimizer — Agent Copilot
 
-A **Validation Flywheel** copilot that automates testing and optimization of HighLevel Voice AI agent prompts.
+A **Validation Flywheel** that automates the Test and Optimize phases for HighLevel Voice AI agents. It analyzes an agent's system prompt, auto-generates test cases with KPIs, simulates multi-turn conversations, evaluates results, and auto-optimizes the prompt — all in one continuous loop.
 
-## What It Does
+---
 
-1. **Fetches** an agent's system prompt from HighLevel
-2. **Generates** 5 test cases via Claude (QA architect persona)
-3. **Simulates** multi-turn conversations (Claude-vs-Claude, 6 turns each)
-4. **Evaluates** each conversation against KPIs
-5. **Auto-pushes** an optimized prompt to HighLevel when failures are found
-6. **Shows** a before/after diff in ResultView
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    HighLevel Dashboard                       │
+│                  (Custom JS sidebar widget)                  │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ iframe
+┌──────────────────────▼──────────────────────────────────────┐
+│                Vue 3 SPA (Frontend)                          │
+│   AgentList → Dashboard (3-panel) → Prompt History          │
+│   Pinia store · SSE client · Real-time transcript viewer    │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ HTTP / SSE
+┌──────────────────────▼──────────────────────────────────────┐
+│              Express + TypeScript (Backend)                  │
+│                                                              │
+│  /auth          OAuth 2.0 flow with HL Marketplace          │
+│  /api/agents    Fetch agents from HL Voice AI API           │
+│  /api/flywheel  SSE stream — full validation flywheel       │
+│  /api/optimize  One-shot optimize + auto-push to HL         │
+└──────────┬───────────────────────────┬──────────────────────┘
+           │                           │
+┌──────────▼──────────┐   ┌───────────▼──────────────────────┐
+│  HL Voice AI API     │   │     Anthropic Claude Sonnet 4.6  │
+│  (agents read/write) │   │     5 prompt chains (see below)  │
+└─────────────────────┘   └───────────────────────────────────┘
+```
+
+### Prompt Chain Pipeline
+
+| Chain | Role | Input → Output |
+|-------|------|----------------|
+| 1 — Test Case Generator | QA Architect | Agent prompt → `[{ scenario, kpis[] }]` |
+| 2 — User Simulator | Caller roleplay | Scenario + history → caller message |
+| 3 — Agent Simulator | Agent roleplay | Agent prompt + history → agent response + `isConversationEnd` |
+| 4 — KPI Evaluator | LLM-as-judge | Transcript + KPIs → `{ overall, kpiResults[], summary }` |
+| 5 — Prompt Optimizer | Prompt engineer | Original prompt + failures + passing KPIs → improved prompt |
+
+### Validation Flywheel Loop
+
+```
+Phase 1 — Fix Loop (up to 2 attempts):
+  Generate 5 test cases → Run all → Collect failures
+  → Optimize prompt (preserving passing KPIs) → Push to HL
+  → Re-run ONLY failing cases → Repeat until fixed or attempts exhausted
+
+Phase 2 — Harden Loop (up to 2 batches):
+  Generate NEW test cases → Run them
+  → If new failures: re-enter fix loop
+  → If all pass: repeat with fresh cases
+  → Final complete event with full results
+```
 
 ---
 
 ## Tech Stack
 
-- **Backend:** TypeScript + Express
-- **Frontend:** Vue 3 + Vite + Pinia
-- **AI:** Claude Sonnet 4.6 (via Anthropic SDK)
-- **Streaming:** Server-Sent Events (SSE)
-- **Auth:** HighLevel OAuth 2.0
+| Layer | Technology |
+|-------|-----------|
+| Backend | TypeScript + Express + ts-node |
+| Frontend | Vue 3 + Vite + Pinia |
+| AI | Claude Sonnet 4.6 (Anthropic SDK) |
+| Streaming | Server-Sent Events (SSE) |
+| Auth | HighLevel OAuth 2.0 |
+| Deployment | Railway (single service — backend serves frontend) |
 
 ---
 
-## Quick Start
+## What Is Functional vs Mocked
 
-### 1. Install Dependencies
+| Feature | Status | Notes |
+|---------|--------|-------|
+| HL OAuth 2.0 | ✅ Real | Full token exchange + refresh |
+| Fetch agents from HL API | ✅ Real | `GET /voice-ai/agents` |
+| Push optimized prompt to HL | ✅ Real | `PATCH /voice-ai/agents/:id` |
+| Test case generation | ✅ Real (LLM) | Claude generates scenarios + KPIs from prompt |
+| Conversation simulation | 🟡 Simulated | Two Claude instances roleplay caller + agent (no actual phone calls) |
+| KPI evaluation | ✅ Real (LLM) | Claude-as-judge evaluates full transcripts |
+| Prompt optimization | ✅ Real (LLM) | Claude rewrites prompt targeting failures |
 
-```bash
-npm run setup
-```
-
-### 2. Configure Environment
-
-```bash
-cp .env.example .env
-```
-
-Fill in your credentials:
-
-```
-HL_CLIENT_ID=your_hl_client_id
-HL_CLIENT_SECRET=your_hl_client_secret
-HL_REDIRECT_URI=http://localhost:3000/redirect
-ANTHROPIC_API_KEY=your_anthropic_api_key
-SESSION_SECRET=your-random-secret-string
-```
-
-### 3. Development Mode
-
-Run backend and frontend separately:
-
-```bash
-# Terminal 1: Backend (TypeScript with ts-node)
-npm run dev
-
-# Terminal 2: Frontend (Vite dev server with proxy)
-cd frontend && npm run dev
-# Open http://localhost:5173
-```
-
-### 4. Production / Demo Mode
-
-```bash
-npm run demo
-# Builds frontend → public/, then starts Express serving everything at :3000
-open http://localhost:3000
-```
+> Voice AI calls are simulated via LLM-vs-LLM conversation — acceptable per the assignment since HL Voice AI APIs don't expose real-time call simulation in sandbox.
 
 ---
 
-## Demo Script
+## Team of One — Product, Design, Engineering & QA
 
-1. Open `http://localhost:3000`
-2. Click **"Connect HighLevel"** → Complete OAuth consent → Returns to app (status bar shows "Connected")
-3. Select an agent from the grid → Navigates to Dashboard
-4. Click **"Run Simulation"** → Watch 5 test cases stream live with conversation turns and KPI badges
-5. Click **"Optimize Prompt"** → Auto-pushes → Navigates to ResultView
-6. ResultView shows before/after diff + **"Prompt pushed to HighLevel ✓"** notice
+**Product:** Defined the flywheel loop (fix → harden) based on the requirement to close the testing-to-optimization loop automatically. Chose auto-push over user confirmation to minimize friction.
+
+**Design:** Built a 3-panel dashboard (Test Cases · Transcript · KPI Results) with live streaming — designed for observability so the user can watch the flywheel run in real time. Dark theme matching HL's aesthetic. Embedded as a sidebar widget so it feels native inside HL.
+
+**Engineering:** TypeScript backend with SSE streaming, Zod-validated config, Winston structured logging, cooperative timeout strategy (flag-based, not Promise.race) so partial results are always preserved on timeout.
+
+**QA:** The tool QAs itself — each flywheel run is its own validation pass. Architecture decisions logged in `decisions/learnings.md`. Prompt chain retries (2x) on JSON parse failures.
 
 ---
 
-## Fast Demo Mode
+## Installation — HighLevel Sandbox Setup
 
-To speed up simulation (fewer turns/cases):
+### Prerequisites
+- HighLevel agency account with Marketplace developer access
+- A Voice AI agent already created in HL with a system prompt
 
-```bash
-CONVERSATION_TURNS=2 NUM_TEST_CASES=2 npm run demo
+### Step 1 — Install the Widget via Custom JS
+
+In HighLevel, go to:
+**Settings → Custom JS/CSS** (at the sub-account level)
+
+Paste the following script and click **Save**:
+
+```js
+(function () {
+  var APP_URL = 'https://ghlassignment-production.up.railway.app';
+
+  // Sidebar panel
+  var sidebar = document.createElement('div');
+  sidebar.id = 'ghl-copilot-sidebar';
+  sidebar.style.cssText = [
+    'position:fixed', 'top:0', 'right:-440px', 'width:440px',
+    'height:100vh', 'background:#0f1117', 'border-left:1px solid #2d3348',
+    'z-index:99999', 'transition:right 0.3s ease',
+    'box-shadow:-4px 0 24px rgba(0,0,0,0.5)', 'display:flex', 'flex-direction:column'
+  ].join(';');
+
+  var iframe = document.createElement('iframe');
+  iframe.src = APP_URL;
+  iframe.allow = 'same-origin';
+  iframe.style.cssText = 'width:100%;height:100%;border:none;flex:1;';
+  sidebar.appendChild(iframe);
+
+  // Toggle button
+  var btn = document.createElement('button');
+  btn.innerHTML = '&#9889; Voice AI Copilot';
+  btn.style.cssText = [
+    'position:fixed', 'bottom:24px', 'right:24px', 'z-index:99999',
+    'background:#7c3aed', 'color:white', 'border:none', 'border-radius:24px',
+    'padding:12px 20px', 'font-size:14px', 'font-weight:600', 'cursor:pointer',
+    'box-shadow:0 4px 16px rgba(124,58,237,0.4)', 'transition:all 0.2s ease',
+    'font-family:inherit'
+  ].join(';');
+
+  var isOpen = false;
+  btn.addEventListener('click', function () {
+    isOpen = !isOpen;
+    sidebar.style.right = isOpen ? '0' : '-440px';
+    btn.style.right = isOpen ? '456px' : '24px';
+    btn.innerHTML = isOpen ? '&#10005; Close' : '&#9889; Voice AI Copilot';
+  });
+
+  document.body.appendChild(sidebar);
+  document.body.appendChild(btn);
+})();
 ```
+
+### Step 2 — Connect Your HighLevel Account
+
+1. Click the **⚡ Voice AI Copilot** button (bottom-right of any HL page)
+2. Click **"Connect HighLevel"** inside the sidebar
+3. Complete the OAuth consent screen — select your sub-account
+4. You'll be redirected back with **"Connected"** status shown
+
+### Step 3 — Run the Validation Flywheel
+
+1. Select a Voice AI agent from the list
+2. Click **"▶ Run Simulation"**
+3. Watch the flywheel run live:
+   - **Phase 1 (Fix Loop):** Generates 5 test cases → simulates conversations → evaluates KPIs → auto-optimizes and re-tests failing cases
+   - **Phase 2 (Harden Loop):** Generates fresh test cases to stress-test the improved prompt
+4. View **Prompt History** to see before/after versions with pass rates
+5. The optimized prompt is **automatically pushed** to your HL Voice AI agent
 
 ---
 
@@ -95,26 +181,27 @@ CONVERSATION_TURNS=2 NUM_TEST_CASES=2 npm run demo
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/auth` | Redirects to HL OAuth |
-| GET | `/redirect` | OAuth callback (HL app config) |
-| GET | `/auth/callback` | Alias for `/redirect` |
-| GET | `/auth/status` | Returns auth state |
+| GET | `/auth` | Redirects to HL OAuth consent |
+| GET | `/redirect` | OAuth callback — exchanges code for token |
+| GET | `/auth/status` | Returns `{ authenticated, locationId }` |
 | GET | `/auth/logout` | Clears session |
 | GET | `/api/agents` | Lists all Voice AI agents |
-| GET | `/api/agents/:id` | Gets a single agent |
-| GET | `/api/simulate?agentId=` | SSE stream — full simulation |
-| POST | `/api/optimize` | Optimize + auto-push to HL |
+| GET | `/api/flywheel?agentId=` | SSE stream — full validation flywheel |
+| POST | `/api/optimize` | One-shot optimize + auto-push |
 
-### SSE Events (`GET /api/simulate`)
+### SSE Events (`GET /api/flywheel`)
 
 | Event | Payload |
 |-------|---------|
-| `status` | `{ message: string }` |
-| `testcase_start` | `{ index: number, testCase: { scenario, kpis[] } }` |
-| `turn` | `{ caseIndex: number, role: 'user'\|'assistant', content: string }` |
-| `evaluated` | `{ index: number, evaluation: { overall, kpiResults[], summary } }` |
-| `complete` | `{ testCases[], results[], failures[] }` |
-| `error` | `{ message: string }` |
+| `status` | `{ message }` |
+| `phase_change` | `{ phase: 'fix'\|'harden', attempt, total }` |
+| `testcase_start` | `{ index, testCase: { scenario, kpis[] } }` |
+| `turn` | `{ caseIndex, role: 'user'\|'assistant', content }` |
+| `evaluated` | `{ index, evaluation: { overall, kpiResults[], summary } }` |
+| `optimize_start` | `{ attempt }` |
+| `optimize_complete` | `{ optimizedPrompt, attempt }` |
+| `complete` | `{ testCases[], results[], failures[], currentPrompt, timedOut, completedCount }` |
+| `error` | `{ message }` |
 
 ---
 
@@ -122,62 +209,47 @@ CONVERSATION_TURNS=2 NUM_TEST_CASES=2 npm run demo
 
 ```
 ghl_assignment/
-├── server/                    # TypeScript Express backend
-│   ├── index.ts               # Entry point
-│   ├── config.ts              # Zod-validated env config
+├── server/                      # TypeScript Express backend
+│   ├── index.ts                 # Entry point + Express setup
+│   ├── config.ts                # Zod-validated env config
+│   ├── logger.ts                # Winston structured logger
 │   ├── routes/
-│   │   ├── auth.ts            # OAuth routes
-│   │   ├── agents.ts          # Agent CRUD
-│   │   └── simulation.ts      # SSE simulate + optimize
+│   │   ├── auth.ts              # OAuth routes
+│   │   ├── agents.ts            # Agent list/get
+│   │   └── simulation.ts        # /flywheel + /optimize SSE endpoints
 │   ├── services/
-│   │   ├── sessionStore.ts    # In-memory token store
-│   │   ├── hlClient.ts        # HL API Axios wrapper
-│   │   ├── promptChains.ts    # 5 Claude chains
-│   │   └── simulationEngine.ts # Orchestration + timeout
+│   │   ├── sessionStore.ts      # In-memory token store
+│   │   ├── hlClient.ts          # HL API Axios wrapper
+│   │   ├── promptChains.ts      # 5 Claude chains
+│   │   └── simulationEngine.ts  # Flywheel orchestration
 │   └── middleware/
-│       ├── auth.ts            # requireAuth guard
-│       └── api.ts             # Request logging + error handler
-├── frontend/                  # Vue 3 + Vite SPA
+│       ├── auth.ts              # requireAuth guard
+│       └── api.ts               # Request logging + error handler
+├── frontend/                    # Vue 3 + Vite SPA
 │   └── src/
-│       ├── views/             # AgentList, Dashboard, ResultView
-│       ├── components/        # AgentCard, TestCaseCard, PromptDiff, etc.
-│       ├── stores/copilot.js  # Pinia store
+│       ├── views/               # AgentList, Dashboard, PromptHistory
+│       ├── components/          # TestCaseCard, TranscriptViewer, KpiResultBadge, PromptDiff
+│       ├── stores/copilot.js    # Pinia store — all state + SSE handlers
 │       └── router/index.js
-├── public/                    # Vite build output (served by Express)
-├── decisions/learnings.md     # Architecture decisions log
-└── plan.md                    # Full implementation plan
+├── public/                      # Vite build output (served by Express)
+├── decisions/learnings.md       # Architecture decisions + bug fixes log
+└── README.md
 ```
 
 ---
 
-## Deployment
+## Environment Variables
 
-### Vercel (Frontend) + Railway/Render (Backend)
-
-1. **Backend (Railway/Render):**
-   - Set all env vars in dashboard
-   - Start command: `npm start` (runs `node dist/server/index.js`)
-   - Build command: `npm run build:server`
-   - Update `HL_REDIRECT_URI` to your Railway/Render URL
-
-2. **Frontend (Vercel):**
-   - Build command: `cd frontend && npm run build`
-   - Output directory: `public`
-   - Set `VITE_API_BASE_URL` to your Railway/Render URL if deploying separately
-
-3. **HighLevel App Config:**
-   - Redirect URI: `https://your-backend.railway.app/redirect`
-   - Add your hosted URL as Custom JS module for widget embedding
-
-### HighLevel Widget Embedding
-
-Add to HL Custom JS:
-```html
-<script>
-  // Load the copilot as an embedded widget
-  const iframe = document.createElement('iframe');
-  iframe.src = 'https://your-deployed-url.com';
-  iframe.style = 'width:100%;height:600px;border:none;';
-  document.body.appendChild(iframe);
-</script>
-```
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `HL_CLIENT_ID` | ✅ | — | HL Marketplace app client ID |
+| `HL_CLIENT_SECRET` | ✅ | — | HL Marketplace app client secret |
+| `HL_REDIRECT_URI` | ✅ | `http://localhost:3000/redirect` | OAuth callback URL |
+| `ANTHROPIC_API_KEY` | ✅ | — | Anthropic API key |
+| `SESSION_SECRET` | — | `dev-secret` | Express session secret |
+| `NUM_TEST_CASES` | — | `5` | Test cases per flywheel run |
+| `MAX_TURNS_PER_CASE` | — | `15` | Max conversation turns per case |
+| `PER_CASE_TIMEOUT_MS` | — | `120000` | Per-case timeout (ms) |
+| `SIMULATION_TIMEOUT_MS` | — | `660000` | Total flywheel timeout (ms) |
+| `MAX_OPTIMIZE_ATTEMPTS` | — | `2` | Fix loop attempts |
+| `MAX_HARDEN_BATCHES` | — | `2` | Harden loop batches |

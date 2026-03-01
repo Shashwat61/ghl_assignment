@@ -6,7 +6,7 @@
         <div class="connect-icon">🔗</div>
         <h2>Connect Your HighLevel Account</h2>
         <p>Link your HighLevel account to start optimizing your Voice AI agents.</p>
-        <a href="/auth" class="btn btn-primary btn-lg">Connect HighLevel</a>
+        <button class="btn btn-primary btn-lg" @click="connectHL">Connect HighLevel</button>
       </div>
     </div>
 
@@ -64,6 +64,20 @@ const store = useCopilotStore();
 const router = useRouter();
 const loading = ref(false);
 const error = ref(null);
+
+function connectHL() {
+  const popup = window.open('/auth', 'hl-oauth', 'width=600,height=700,left=200,top=100');
+  const timer = setInterval(async () => {
+    if (popup && popup.closed) {
+      clearInterval(timer);
+      // Popup closed — check if auth succeeded
+      await store.checkAuth();
+      if (store.isAuthenticated) {
+        loadAgents();
+      }
+    }
+  }, 500);
+}
 
 async function loadAgents() {
   if (!store.isAuthenticated) return;

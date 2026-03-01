@@ -65,7 +65,11 @@ async function handleOAuthCallback(req: Request, res: Response): Promise<void> {
     });
 
     console.log(`✓ OAuth success — locationId: ${locationId || '(none)'}`);
-    res.redirect('/');
+    // If opened in a popup, close it; otherwise redirect to home
+    res.send(`<!DOCTYPE html><html><body><script>
+      if (window.opener) { window.close(); }
+      else { window.location.href = '/'; }
+    <\/script></body></html>`);
   } catch (err) {
     console.error('OAuth token exchange failed:', err);
     res.redirect('/?error=token_exchange_failed');
