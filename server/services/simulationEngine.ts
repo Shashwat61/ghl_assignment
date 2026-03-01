@@ -39,6 +39,13 @@ export interface SimulationResult {
   failures: FailureEntry[];
 }
 
+// Stored caller messages per failing case — used for deterministic re-runs
+interface CaseReplay {
+  testCase: TestCase;
+  originalIndex: number;
+  callerMessages: string[]; // the exact user messages from the original run
+}
+
 // Collect passing KPIs from current results to pass to optimizer
 function collectPasses(testCases: TestCase[], results: EvaluationResult[]): PassEntry[] {
   const passes: PassEntry[] = [];
@@ -56,7 +63,7 @@ function collectPasses(testCases: TestCase[], results: EvaluationResult[]): Pass
 }
 
 // ---------------------------------------------------------------------------
-// Run a fixed set of test cases against a prompt (no generation)
+// Run initial test cases — simulates caller fresh, stores caller messages
 // ---------------------------------------------------------------------------
 
 export async function runTestCases(
@@ -64,9 +71,10 @@ export async function runTestCases(
   testCases: TestCase[],
   onProgress: ProgressCallback,
   indices?: number[],
-): Promise<SimulationResult> {
+): Promise<SimulationResult & { replays: CaseReplay[] }> {
   const results: EvaluationResult[] = [];
   const failures: FailureEntry[] = [];
+  const replays: CaseReplay[] = [];
 
   let timedOut = false;
   const timeoutHandle = setTimeout(() => { timedOut = true; }, config.simulation.timeoutMs);
@@ -81,6 +89,7 @@ export async function runTestCases(
 
       const history: ConversationTurn[] = [];
       const transcript: ConversationTurn[] = [];
+      const callerMessages: string[] = [];
 
       let caseTimedOut = false;
       const caseTimeoutHandle = setTimeout(() => { caseTimedOut = true; }, config.simulation.perCaseTimeoutMs);
@@ -90,6 +99,7 @@ export async function runTestCases(
           if (timedOut || caseTimedOut) break;
 
           const userMessage = await simulateUserTurn(testCase.scenario, history);
+          callerMessages.push(userMessage);
           const userTurn: ConversationTurn = { role: 'user', content: userMessage };
           history.push(userTurn);
           transcript.push(userTurn);
@@ -117,6 +127,8 @@ export async function runTestCases(
       results.push(evaluation);
       onProgress({ type: 'evaluated', index: displayIndex, evaluation });
 
+      replays.push({ testCase, originalIndex: displayIndex, callerMessages });
+
       for (const kpiResult of evaluation.kpiResults) {
         if (kpiResult.result === 'fail') {
           failures.push({
@@ -131,11 +143,67 @@ export async function runTestCases(
     clearTimeout(timeoutHandle);
   }
 
-  return { testCases, results, failures };
+  return { testCases, results, failures, replays };
 }
 
 // ---------------------------------------------------------------------------
-// Full flywheel — Phase 1 (fix) + Phase 2 (harden)
+// Re-run failing cases replaying the EXACT same caller messages
+// ---------------------------------------------------------------------------
+
+async function rerunWithReplay(
+  agentPrompt: string,
+  failingReplays: CaseReplay[],
+  onProgress: ProgressCallback,
+): Promise<{ results: EvaluationResult[]; failures: FailureEntry[] }> {
+  const results: EvaluationResult[] = [];
+  const failures: FailureEntry[] = [];
+
+  for (const replay of failingReplays) {
+    const { testCase, originalIndex, callerMessages } = replay;
+    onProgress({ type: 'testcase_start', index: originalIndex, testCase });
+
+    const history: ConversationTurn[] = [];
+    const transcript: ConversationTurn[] = [];
+
+    for (let turn = 0; turn < callerMessages.length; turn++) {
+      // Replay the exact same caller message
+      const userMessage = callerMessages[turn];
+      const userTurn: ConversationTurn = { role: 'user', content: userMessage };
+      history.push(userTurn);
+      transcript.push(userTurn);
+      onProgress({ type: 'turn', caseIndex: originalIndex, role: 'user', content: userMessage });
+
+      // Get agent response with new prompt
+      const agentResult: AgentTurnResult = await simulateAgentTurn(agentPrompt, history);
+      const agentTurn: ConversationTurn = { role: 'assistant', content: agentResult.content };
+      history.push(agentTurn);
+      transcript.push(agentTurn);
+      onProgress({ type: 'turn', caseIndex: originalIndex, role: 'assistant', content: agentResult.content });
+
+      if (agentResult.isConversationEnd) break;
+    }
+
+    onProgress({ type: 'status', message: `Evaluating case ${originalIndex + 1}...` });
+    const evaluation = await evaluateTranscript(transcript, testCase.kpis, testCase.scenario);
+    results.push(evaluation);
+    onProgress({ type: 'evaluated', index: originalIndex, evaluation });
+
+    for (const kpiResult of evaluation.kpiResults) {
+      if (kpiResult.result === 'fail') {
+        failures.push({
+          scenario: testCase.scenario,
+          kpi: kpiResult.kpi,
+          reasoning: kpiResult.reasoning,
+        });
+      }
+    }
+  }
+
+  return { results, failures };
+}
+
+// ---------------------------------------------------------------------------
+// Full flywheel
 // ---------------------------------------------------------------------------
 
 export async function runFlywheel(
@@ -146,26 +214,23 @@ export async function runFlywheel(
 ): Promise<void> {
   const { numTestCases, maxOptimizeAttempts } = config.simulation;
   let currentPrompt = initialPrompt;
-  let allTestCases: TestCase[] = [];
-  let allResults: EvaluationResult[] = [];
 
-  // ---- Phase 1: Fix loop ----
-  onProgress({ type: 'status', message: 'Phase 1: Generating initial test cases...' });
+  // ---- Initial run ----
+  onProgress({ type: 'status', message: 'Generating test cases...' });
   const initialCases = await generateTestCases(currentPrompt, numTestCases);
-  allTestCases = [...initialCases];
 
   onProgress({ type: 'phase_change', phase: 'fix', attempt: 1, total: maxOptimizeAttempts });
   const initialIndices = initialCases.map((_, i) => i);
-  let { results, failures } = await runTestCases(currentPrompt, initialCases, onProgress, initialIndices);
-  allResults = [...results];
+  const initialRun = await runTestCases(currentPrompt, initialCases, onProgress, initialIndices);
 
-  // Fix loop — re-run only the failing test cases after each optimize
-  let failingCases = initialCases.filter((_, i) => results[i]?.overall === 'fail');
-  logger.info(`Phase 1 initial run done — results: ${results.length}, failures: ${failures.length}, failingCases: ${failingCases.length}`);
+  const allTestCases = [...initialCases];
+  const allResults = [...initialRun.results];
 
-  // If all test cases pass on the first run, prompt is already optimized — skip flywheel
-  if (failures.length === 0) {
-    onProgress({ type: 'status', message: 'All test cases passed — prompt is already optimized!' });
+  logger.info(`Initial run done — results: ${initialRun.results.length}, failures: ${initialRun.failures.length}`);
+
+  // All passed — already optimized
+  if (initialRun.failures.length === 0) {
+    onProgress({ type: 'status', message: '✅ All test cases passed — prompt is already optimized!' });
     onProgress({
       type: 'complete',
       testCases: allTestCases,
@@ -178,7 +243,11 @@ export async function runFlywheel(
     return;
   }
 
-  // Optimize → push → re-run failing cases (up to maxOptimizeAttempts)
+  // Build replays for failing cases
+  let failingReplays = initialRun.replays.filter((_, i) => initialRun.results[i]?.overall === 'fail');
+  let failures = initialRun.failures;
+
+  // ---- Fix loop: optimize → re-run with same caller messages → push only if passing ----
   for (let attempt = 1; attempt <= maxOptimizeAttempts && failures.length > 0; attempt++) {
     logger.info(`Fix loop attempt ${attempt}/${maxOptimizeAttempts} — ${failures.length} failures`);
 
@@ -192,41 +261,56 @@ export async function runFlywheel(
     }
     onProgress({ type: 'optimize_complete', optimizedPrompt: currentPrompt, attempt });
 
+    // Re-run with the EXACT same caller messages — fair comparison
+    onProgress({ type: 'phase_change', phase: 'fix', attempt: Math.min(attempt + 1, maxOptimizeAttempts), total: maxOptimizeAttempts });
+    onProgress({ type: 'status', message: `Re-running ${failingReplays.length} failing case(s) with optimized prompt...` });
+
+    const retryRun = await rerunWithReplay(currentPrompt, failingReplays, onProgress);
+
+    // Merge results back
+    failingReplays.forEach((replay, ri) => {
+      const idx = allTestCases.indexOf(replay.testCase);
+      if (idx !== -1 && retryRun.results[ri]) {
+        allResults[idx] = retryRun.results[ri];
+      }
+    });
+
+    failures = retryRun.failures;
+
+    if (failures.length === 0) {
+      // All passing — push now
+      onProgress({ type: 'status', message: '✅ All test cases pass — pushing optimized prompt to HighLevel...' });
+      onProgress({ type: 'push_start' });
+      try {
+        await pushPrompt(currentPrompt);
+        onProgress({ type: 'push_complete', success: true });
+        onProgress({ type: 'status', message: '✅ Optimized prompt pushed to HighLevel!' });
+      } catch (err) {
+        logger.error(`pushPrompt failed`, { error: err instanceof Error ? err.stack : err });
+        onProgress({ type: 'push_complete', success: false });
+      }
+      break;
+    } else {
+      onProgress({ type: 'status', message: `${failures.length} case(s) still failing after attempt ${attempt}.` });
+      // Update failing replays to only those still failing
+      failingReplays = failingReplays.filter((_, ri) => retryRun.results[ri]?.overall === 'fail');
+    }
+  }
+
+  // If still failing after all attempts — push best prompt we have
+  if (failures.length > 0) {
+    onProgress({ type: 'status', message: `Could not fix all cases in ${maxOptimizeAttempts} attempts — pushing best prompt so far.` });
     onProgress({ type: 'push_start' });
     try {
       await pushPrompt(currentPrompt);
       onProgress({ type: 'push_complete', success: true });
     } catch (err) {
-      logger.error(`pushPrompt failed on attempt ${attempt}`, { error: err instanceof Error ? err.stack : err });
+      logger.error(`pushPrompt failed (final)`, { error: err instanceof Error ? err.stack : err });
       onProgress({ type: 'push_complete', success: false });
-    }
-
-    if (failingCases.length === 0) break;
-
-    onProgress({ type: 'phase_change', phase: 'fix', attempt: Math.min(attempt + 1, maxOptimizeAttempts), total: maxOptimizeAttempts });
-    onProgress({ type: 'status', message: `Re-running ${failingCases.length} previously failing case(s) with optimized prompt...` });
-
-    const retryIndices = failingCases.map((tc) => allTestCases.indexOf(tc));
-    const retryResult = await runTestCases(currentPrompt, failingCases, onProgress, retryIndices);
-
-    failingCases.forEach((tc, ri) => {
-      const idx = allTestCases.indexOf(tc);
-      if (idx !== -1 && retryResult.results[ri]) {
-        allResults[idx] = retryResult.results[ri];
-      }
-    });
-
-    failures = retryResult.failures;
-    failingCases = failingCases.filter((_, ri) => retryResult.results[ri]?.overall === 'fail');
-
-    if (failures.length === 0) {
-      onProgress({ type: 'status', message: '✅ All test cases now pass — prompt is optimized!' });
-    } else {
-      onProgress({ type: 'status', message: `${failures.length} case(s) still failing after attempt ${attempt}.` });
     }
   }
 
-  // Collect final failures across all results
+  // Collect final failures
   const finalFailures: FailureEntry[] = [];
   allTestCases.forEach((tc, i) => {
     const result = allResults[i];
@@ -262,7 +346,8 @@ export async function runFullSimulation(
   onProgress({ type: 'status', message: 'Generating test cases...' });
   const testCases = await generateTestCases(agentPrompt, numTestCases);
   onProgress({ type: 'status', message: `Generated ${testCases.length} test cases` });
-  return runTestCases(agentPrompt, testCases, onProgress, testCases.map((_, i) => i));
+  const result = await runTestCases(agentPrompt, testCases, onProgress, testCases.map((_, i) => i));
+  return { testCases: result.testCases, results: result.results, failures: result.failures };
 }
 
 export async function generateOptimizedPrompt(
