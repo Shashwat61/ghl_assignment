@@ -175,6 +175,55 @@
 
 ---
 
+## 2026-03-01 Decision: Push-Only-On-Pass + Deterministic Re-runs via Caller Message Replay
+
+**Context:** The original fix loop pushed the optimized prompt to HL immediately after generating it — before re-running the failing test cases. This meant:
+1. HL received a new prompt even if it didn't actually fix the failures
+2. With `maxOptimizeAttempts=2`, HL was updated twice (once per attempt) regardless of outcome
+3. Each re-run simulated a fresh caller conversation — different caller messages each time — making it impossible to know if the optimization actually fixed the specific failure, since the inputs changed
+
+**Decision 1 — Push only after passing:** Optimize prompt → re-run failing cases → if all pass, push to HL. If still failing, repeat up to `MAX_OPTIMIZE_ATTEMPTS`. Only push at the end if tests never pass (best effort). This means HL is updated at most once with a prompt that has been validated to pass.
+
+**Decision 2 — Replay exact caller messages on re-run:** During the initial run, store each caller's messages per test case (`CaseReplay`). On re-run, replay those exact messages in order — only the agent responds with the new prompt. This makes the re-run a true A/B comparison: same inputs, different prompt, see if output improves.
+
+**Why replay matters:** Without it, a re-run might pass just because the simulated caller happened to ask easier questions — not because the optimization worked. Replaying the same inputs isolates the variable to the prompt only.
+
+**Impact:**
+- `simulationEngine.ts` — `runTestCases()` now returns `replays[]` (callerMessages per case); new `rerunWithReplay()` function replays exact caller messages; `pushPrompt` moved to after successful re-run
+- Loop count unchanged (`maxOptimizeAttempts=2`) — the loop was never running more than 2 times, the issue was push timing not loop count
+
+---
+
+## 2026-03-01 Fix: Re-run Creating New Test Case Slots Instead of Overwriting
+
+**Root Cause:** `runTestCases` used `indexOffset + i` for display indices. When re-running failing cases, `retryOffset = allTestCases.indexOf(failingCases[0])` gave the index of the first failing case. If cases 0 and 1 both failed, offset=0 and re-run correctly emitted indices 0 and 1. But if only case 1 failed, offset=1 and the single re-run emitted index 1 — correct. However when `generateTestCases` returned more cases than `numTestCases` (Claude ignoring "exactly N"), extra cases got appended at wrong indices.
+
+**Fix 1:** Hard-cap `generateTestCases` output with `.slice(0, numCases)`.
+
+**Fix 2:** Replace `indexOffset` with explicit `indices[]` array — each case maps to its exact original index regardless of position in the failingCases array. `retryIndices = failingCases.map(tc => allTestCases.indexOf(tc))`.
+
+---
+
+## 2026-03-01 Fix: Flywheel Counter Showing "3/2" (Beyond Max)
+
+**Root Cause:** `phase_change` was emitted with `attempt + 1` after each re-run, so the last attempt (attempt=2) emitted `{ attempt: 3, total: 2 }`.
+
+**Fix:** Total is now `maxOptimizeAttempts`, re-run emits `Math.min(attempt + 1, maxOptimizeAttempts)`. Initial run shows 1/2, re-run after first optimize shows 2/2. Never exceeds total.
+
+---
+
+## 2026-03-01 Decision: User-Supplied Anthropic API Key (No Env Fallback)
+
+**Context:** The app is deployed on Railway with the author's Anthropic API key. If the reviewer uses the hosted app and the author's credits run out, the app stops working. Additionally, from a UX standpoint the reviewer should use their own key.
+
+**Decision:** Require the user to enter their own `sk-ant-*` key in the frontend before the app runs. Key is stored in session memory on the backend (`sessionStore.setAnthropicApiKey()`). `promptChains.ts` uses the session key exclusively — no fallback to the env var.
+
+**UX:** Blocking card shown on AgentList when no key is set. Once saved, a small "🔑 Custom Key Active" button lets them update it. Key is validated to start with `sk-ant-` before saving.
+
+**Impact:** `server/services/sessionStore.ts` — added `setAnthropicApiKey/getAnthropicApiKey`; `server/services/promptChains.ts` — `getClient()` uses session key only, throws clear error if missing; `server/routes/agents.ts` — `POST/GET /api/settings/anthropic-key`; `frontend/src/views/AgentList.vue` — blocking key entry card.
+
+---
+
 ## 2026-02-28 Fix: Transcript Auto-Scroll Not Working
 
 **Root Cause:** `ref="messagesEl"` was on the inner `.messages` div which has no fixed height and therefore no scrollable overflow. The actual scrollable container is the outer `.transcript-viewer` div.
