@@ -46,17 +46,15 @@ A **Validation Flywheel** that automates the Test and Optimize phases for HighLe
 ### Validation Flywheel Loop
 
 ```
-Phase 1 — Fix Loop (up to 2 attempts):
-  Generate 5 test cases → Run all → Collect failures
+Fix Loop (up to 2 attempts):
+  Generate N test cases → Run all → Collect failures
   → Optimize prompt (preserving passing KPIs) → Push to HL
-  → Re-run ONLY failing cases → Repeat until fixed or attempts exhausted
-
-Phase 2 — Harden Loop (up to 2 batches):
-  Generate NEW test cases → Run them
-  → If new failures: re-enter fix loop
-  → If all pass: repeat with fresh cases
-  → Final complete event with full results
+  → Re-run ONLY the failing cases with the optimized prompt
+  → If all pass: "Prompt optimized!" ✅
+  → If still failing: repeat up to MAX_OPTIMIZE_ATTEMPTS
 ```
+
+> **Future enhancement — Harden Loop:** After the fix loop completes, a second phase could generate a fresh batch of test cases to stress-test the optimized prompt against novel scenarios it wasn't specifically fixed for — preventing overfitting. This is not implemented in the current demo build but is architecturally straightforward to add.
 
 ---
 
@@ -204,16 +202,17 @@ ghl_assignment/
 
 ## Environment Variables
 
+> **For reviewers running this locally:** The only variable you need to supply is your own `ANTHROPIC_API_KEY`. All other required variables (`HL_CLIENT_ID`, `HL_CLIENT_SECRET`, `HL_REDIRECT_URI`) are pre-configured in the Railway deployment. To run locally, copy `.env.example` to `.env` and fill in your Anthropic API key.
+
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `HL_CLIENT_ID` | ✅ | — | HL Marketplace app client ID |
-| `HL_CLIENT_SECRET` | ✅ | — | HL Marketplace app client secret |
+| `ANTHROPIC_API_KEY` | ✅ | — | **Your Anthropic API key** — the only key you need to provide |
+| `HL_CLIENT_ID` | ✅ | — | HL Marketplace app client ID (pre-set on Railway) |
+| `HL_CLIENT_SECRET` | ✅ | — | HL Marketplace app client secret (pre-set on Railway) |
 | `HL_REDIRECT_URI` | ✅ | `http://localhost:3000/redirect` | OAuth callback URL |
-| `ANTHROPIC_API_KEY` | ✅ | — | Anthropic API key |
 | `SESSION_SECRET` | — | `dev-secret` | Express session secret |
-| `NUM_TEST_CASES` | — | `5` | Test cases per flywheel run |
+| `NUM_TEST_CASES` | — | `2` | Test cases per flywheel run |
 | `MAX_TURNS_PER_CASE` | — | `15` | Max conversation turns per case |
 | `PER_CASE_TIMEOUT_MS` | — | `120000` | Per-case timeout (ms) |
 | `SIMULATION_TIMEOUT_MS` | — | `660000` | Total flywheel timeout (ms) |
 | `MAX_OPTIMIZE_ATTEMPTS` | — | `2` | Fix loop attempts |
-| `MAX_HARDEN_BATCHES` | — | `2` | Harden loop batches |

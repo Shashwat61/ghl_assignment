@@ -44,9 +44,6 @@
             <span v-else-if="store.flywheelPhase === 'fix'">
               Fix Loop · Attempt {{ store.flywheelAttempt }}/{{ store.flywheelTotal }}
             </span>
-            <span v-else-if="store.flywheelPhase === 'harden'">
-              Harden · Batch {{ store.flywheelAttempt }}/{{ store.flywheelTotal }}
-            </span>
             <span v-else>Simulating...</span>
           </div>
 

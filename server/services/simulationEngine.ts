@@ -20,7 +20,7 @@ import {
 
 export type SimulationProgressEvent =
   | { type: 'status'; message: string }
-  | { type: 'phase_change'; phase: 'fix' | 'harden'; attempt: number; total: number }
+  | { type: 'phase_change'; phase: 'fix'; attempt: number; total: number }
   | { type: 'testcase_start'; index: number; testCase: TestCase }
   | { type: 'turn'; caseIndex: number; role: 'user' | 'assistant'; content: string }
   | { type: 'evaluated'; index: number; evaluation: EvaluationResult }
@@ -144,7 +144,7 @@ export async function runFlywheel(
   onProgress: ProgressCallback,
   pushPrompt: (prompt: string) => Promise<void>,
 ): Promise<void> {
-  const { numTestCases, maxOptimizeAttempts, maxHardenBatches } = config.simulation;
+  const { numTestCases, maxOptimizeAttempts } = config.simulation;
   let currentPrompt = initialPrompt;
   let allTestCases: TestCase[] = [];
   let allResults: EvaluationResult[] = [];
@@ -177,11 +177,11 @@ export async function runFlywheel(
     return;
   }
 
+  // Optimize → push → re-run failing cases (up to maxOptimizeAttempts)
   for (let attempt = 1; attempt <= maxOptimizeAttempts && failures.length > 0; attempt++) {
     logger.info(`Fix loop attempt ${attempt}/${maxOptimizeAttempts} — ${failures.length} failures`);
 
     onProgress({ type: 'optimize_start', attempt });
-    logger.debug(`Optimizing prompt (attempt ${attempt}):\n` + currentPrompt);
     const passes = collectPasses(allTestCases, allResults);
     try {
       currentPrompt = await optimizePrompt(currentPrompt, failures, passes);
@@ -189,7 +189,6 @@ export async function runFlywheel(
       logger.error(`optimizePrompt failed on attempt ${attempt}`, { error: err instanceof Error ? err.stack : err });
       break;
     }
-    logger.debug(`Optimized prompt (attempt ${attempt}):\n` + currentPrompt);
     onProgress({ type: 'optimize_complete', optimizedPrompt: currentPrompt, attempt });
 
     onProgress({ type: 'push_start' });
@@ -204,13 +203,11 @@ export async function runFlywheel(
     if (failingCases.length === 0) break;
 
     onProgress({ type: 'phase_change', phase: 'fix', attempt: Math.min(attempt + 1, maxOptimizeAttempts), total: maxOptimizeAttempts });
-    onProgress({ type: 'status', message: `Re-running ${failingCases.length} previously failing case(s)...` });
+    onProgress({ type: 'status', message: `Re-running ${failingCases.length} previously failing case(s) with optimized prompt...` });
 
-    // Re-run only the failing cases, mapped back to their original indices
     const retryOffset = allTestCases.indexOf(failingCases[0]);
     const retryResult = await runTestCases(currentPrompt, failingCases, onProgress, retryOffset);
 
-    // Merge retry results back into allResults at the correct indices
     failingCases.forEach((tc, ri) => {
       const idx = allTestCases.indexOf(tc);
       if (idx !== -1 && retryResult.results[ri]) {
@@ -222,70 +219,9 @@ export async function runFlywheel(
     failingCases = failingCases.filter((_, ri) => retryResult.results[ri]?.overall === 'fail');
 
     if (failures.length === 0) {
-      onProgress({ type: 'status', message: `All previously failing cases now pass after attempt ${attempt}!` });
-    }
-  }
-
-  if (failures.length > 0) {
-    onProgress({ type: 'status', message: `Fix loop exhausted (${maxOptimizeAttempts} attempts) — ${failures.length} case(s) still failing. Moving on with best prompt so far.` });
-  }
-
-  // ---- Phase 2: Harden loop ----
-  if (failures.length === 0) {
-    for (let batch = 1; batch <= maxHardenBatches; batch++) {
-      onProgress({ type: 'phase_change', phase: 'harden', attempt: batch, total: maxHardenBatches });
-      onProgress({ type: 'status', message: `Phase 2 batch ${batch}/${maxHardenBatches}: Generating new test cases...` });
-
-      const newCases = await generateTestCases(currentPrompt, numTestCases);
-      const offset = allTestCases.length;
-      allTestCases = [...allTestCases, ...newCases];
-
-      const hardenResult = await runTestCases(currentPrompt, newCases, onProgress, offset);
-      allResults = [...allResults, ...hardenResult.results];
-
-      if (hardenResult.failures.length > 0) {
-        // New failures found — go back into fix loop
-        onProgress({ type: 'status', message: `New failures found in harden batch ${batch} — re-entering fix loop` });
-        failures = hardenResult.failures;
-        failingCases = newCases.filter((_, i) => hardenResult.results[i]?.overall === 'fail');
-
-        for (let attempt = 1; attempt <= maxOptimizeAttempts && failures.length > 0; attempt++) {
-          onProgress({ type: 'optimize_start', attempt });
-          const hardenPasses = collectPasses(allTestCases, allResults);
-          try {
-            currentPrompt = await optimizePrompt(currentPrompt, failures, hardenPasses);
-          } catch (err) {
-            logger.error(`optimizePrompt failed (harden batch, attempt ${attempt})`, { error: err instanceof Error ? err.stack : err });
-            break;
-          }
-          onProgress({ type: 'optimize_complete', optimizedPrompt: currentPrompt, attempt });
-          onProgress({ type: 'push_start' });
-          try {
-            await pushPrompt(currentPrompt);
-            onProgress({ type: 'push_complete', success: true });
-          } catch (err) {
-            logger.error(`pushPrompt failed (harden batch, attempt ${attempt})`, { error: err instanceof Error ? err.stack : err });
-            onProgress({ type: 'push_complete', success: false });
-          }
-
-          const retryOffset = allTestCases.indexOf(failingCases[0]);
-          const retryResult = await runTestCases(currentPrompt, failingCases, onProgress, retryOffset);
-
-          failingCases.forEach((tc, ri) => {
-            const idx = allTestCases.indexOf(tc);
-            if (idx !== -1 && retryResult.results[ri]) {
-              allResults[idx] = retryResult.results[ri];
-            }
-          });
-
-          failures = retryResult.failures;
-          failingCases = failingCases.filter((_, ri) => retryResult.results[ri]?.overall === 'fail');
-        }
-
-        if (failures.length > 0) break; // gave up fixing, stop hardening
-      } else {
-        onProgress({ type: 'status', message: `Harden batch ${batch} passed — prompt is solid` });
-      }
+      onProgress({ type: 'status', message: '✅ All test cases now pass — prompt is optimized!' });
+    } else {
+      onProgress({ type: 'status', message: `${failures.length} case(s) still failing after attempt ${attempt}.` });
     }
   }
 
