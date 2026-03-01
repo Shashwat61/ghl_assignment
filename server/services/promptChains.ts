@@ -286,10 +286,16 @@ Your task is to improve an AI agent's system prompt to fix identified failures W
 The improved prompt must be a complete, drop-in replacement — not a diff or commentary.
 Output ONLY the improved system prompt text — no preamble, no explanation, no markdown.`;
 
+export interface PreviousAttempt {
+  prompt: string;
+  failures: FailureEntry[];
+}
+
 export async function optimizePrompt(
   originalPrompt: string,
   failures: FailureEntry[],
   passes: PassEntry[] = [],
+  previousAttempts: PreviousAttempt[] = [],
 ): Promise<string> {
   const failureList = failures
     .map(
@@ -304,11 +310,21 @@ export async function optimizePrompt(
         .join('\n\n')
     : '(none recorded)';
 
+  const previousAttemptsSection = previousAttempts.length > 0
+    ? `\nPREVIOUS OPTIMIZATION ATTEMPTS THAT STILL FAILED (do not repeat the same approach):\n\n` +
+      previousAttempts.map((a, i) => {
+        const prevFailureList = a.failures
+          .map((f) => `   - KPI: "${f.kpi}" — ${f.reasoning}`)
+          .join('\n');
+        return `Attempt ${i + 1} prompt (excerpt — first 300 chars):\n"${a.prompt.slice(0, 300)}..."\nStill failed:\n${prevFailureList}`;
+      }).join('\n\n') + '\n'
+    : '';
+
   const userMessage = `Original agent system prompt:
 ---
 ${originalPrompt}
 ---
-
+${previousAttemptsSection}
 FAILURES to fix (the prompt must address all of these):
 
 ${failureList}

@@ -6,6 +6,7 @@ import {
   EvaluationResult,
   FailureEntry,
   PassEntry,
+  PreviousAttempt,
   AgentTurnResult,
   generateTestCases,
   simulateUserTurn,
@@ -251,6 +252,7 @@ export async function runFlywheel(
   let bestPrompt = currentPrompt;
   let bestFailureCount = failures.length;
   let everPassed = false;
+  const previousAttempts: PreviousAttempt[] = [];
 
   // ---- Fix loop: optimize → re-run with same caller messages → push only if passing ----
   for (let attempt = 1; attempt <= maxOptimizeAttempts && failures.length > 0; attempt++) {
@@ -259,7 +261,7 @@ export async function runFlywheel(
     onProgress({ type: 'optimize_start', attempt });
     const passes = collectPasses(allTestCases, allResults);
     try {
-      currentPrompt = await optimizePrompt(currentPrompt, failures, passes);
+      currentPrompt = await optimizePrompt(currentPrompt, failures, passes, previousAttempts);
     } catch (err) {
       logger.error(`optimizePrompt failed on attempt ${attempt}`, { error: err instanceof Error ? err.stack : err });
       break;
@@ -304,6 +306,8 @@ export async function runFlywheel(
       break;
     } else {
       onProgress({ type: 'status', message: `${failures.length} case(s) still failing after attempt ${attempt}.` });
+      // Record this attempt so the next optimizer knows what was tried and still failed
+      previousAttempts.push({ prompt: currentPrompt, failures });
       // Update failing replays to only those still failing
       failingReplays = failingReplays.filter((_, ri) => retryRun.results[ri]?.overall === 'fail');
     }
