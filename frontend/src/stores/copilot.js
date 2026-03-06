@@ -39,6 +39,15 @@ export const useCopilotStore = defineStore('copilot', {
     // Prompt history (in-memory, per agent session)
     // [{ prompt, label, timestamp, passRate, failures }]
     promptHistory: [],
+
+    // Voice Mode
+    voiceMode: false,
+    voiceSessionId: null,
+    voiceRunStatus: 'idle', // 'idle' | 'running' | 'done' | 'error'
+    voiceError: null,
+    voiceResults: [], // [{ index, testCase, evaluation, recordingFile, recordingExists }]
+    voiceTestCases: [], // parallel test cases list for voice mode
+    voiceStatusMessage: '',
   }),
 
   getters: {
@@ -273,6 +282,96 @@ export const useCopilotStore = defineStore('copilot', {
       this.agents = [];
       this.selectedAgent = null;
       this.resetSimulation();
+    },
+
+    toggleVoiceMode() {
+      this.voiceMode = !this.voiceMode;
+    },
+
+    resetVoiceRun() {
+      this.voiceRunStatus = 'idle';
+      this.voiceError = null;
+      this.voiceResults = [];
+      this.voiceTestCases = [];
+      this.voiceSessionId = null;
+      this.voiceStatusMessage = '';
+    },
+
+    async startVoiceRun(agentId) {
+      this.resetVoiceRun();
+      this.voiceRunStatus = 'running';
+
+      try {
+        const { data } = await axios.post('/api/voice/run', { agentId });
+        this.voiceSessionId = data.sessionId;
+      } catch (err) {
+        this.voiceRunStatus = 'error';
+        this.voiceError = err.response?.data?.error || err.message || 'Failed to start voice run';
+        return;
+      }
+
+      // Open SSE stream
+      const es = new EventSource(`/api/voice/stream?sessionId=${encodeURIComponent(this.voiceSessionId)}`);
+
+      const handleEvent = (type, data) => {
+        switch (type) {
+          case 'voice_status':
+            this.voiceStatusMessage = data.message || '';
+            break;
+
+          case 'voice_case_start':
+            if (!this.voiceTestCases[data.index]) {
+              this.voiceTestCases[data.index] = data.testCase;
+            }
+            break;
+
+          case 'voice_case_complete':
+            this.voiceResults[data.index] = {
+              index: data.index,
+              testCase: data.testCase,
+              evaluation: data.evaluation,
+              recordingFile: data.recordingFile,
+              recordingExists: data.recordingExists,
+            };
+            if (!this.voiceTestCases[data.index]) {
+              this.voiceTestCases[data.index] = data.testCase;
+            }
+            break;
+
+          case 'voice_case_error':
+            this.voiceResults[data.index] = {
+              index: data.index,
+              error: data.message,
+            };
+            break;
+
+          case 'voice_complete':
+            this.voiceRunStatus = 'done';
+            es.close();
+            break;
+
+          case 'voice_error':
+            this.voiceRunStatus = 'error';
+            this.voiceError = data.message;
+            es.close();
+            break;
+        }
+      };
+
+      ['voice_status', 'voice_case_start', 'voice_case_complete', 'voice_case_error'].forEach((evt) => {
+        es.addEventListener(evt, (e) => handleEvent(evt, JSON.parse(e.data)));
+      });
+
+      es.addEventListener('voice_complete', (e) => handleEvent('voice_complete', JSON.parse(e.data)));
+      es.addEventListener('voice_error', (e) => handleEvent('voice_error', JSON.parse(e.data)));
+
+      es.onerror = () => {
+        if (this.voiceRunStatus === 'running') {
+          this.voiceRunStatus = 'error';
+          this.voiceError = 'SSE connection dropped';
+        }
+        es.close();
+      };
     },
   },
 });

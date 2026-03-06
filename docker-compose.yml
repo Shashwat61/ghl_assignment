@@ -1,0 +1,22 @@
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    ports:
+      - "7880:7880"    # HTTP/WebSocket
+      - "7881:7881"    # TCP
+      - "7882:7882/udp" # UDP (WebRTC media)
+    volumes:
+      - ./livekit.yaml:/livekit.yaml
+      - ./recordings:/recordings
+    command: --config /livekit.yaml
+
+  livekit-egress:
+    image: livekit/egress:latest
+    environment:
+      - EGRESS_CONFIG_FILE=/config.yaml
+    volumes:
+      - ./egress.yaml:/config.yaml
+      - ./recordings:/recordings
+    network_mode: host
+    depends_on:
+      - livekit

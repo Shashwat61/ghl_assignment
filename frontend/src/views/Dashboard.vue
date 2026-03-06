@@ -16,7 +16,21 @@
           </div>
         </div>
         <div class="header-actions">
-          <div v-if="store.simulationStatus === 'done'" class="kpi-summary">
+          <!-- Voice Mode KPI summary -->
+          <div v-if="store.voiceMode && store.voiceRunStatus === 'done'" class="kpi-summary">
+            <span class="kpi-stat">
+              <span class="kpi-stat__value text-success">{{ voicePassCount }}</span>
+              <span class="kpi-stat__label">Pass</span>
+            </span>
+            <span class="kpi-divider">/</span>
+            <span class="kpi-stat">
+              <span class="kpi-stat__value text-danger">{{ voiceFailCount }}</span>
+              <span class="kpi-stat__label">Fail</span>
+            </span>
+          </div>
+
+          <!-- Text mode KPI summary -->
+          <div v-else-if="!store.voiceMode && store.simulationStatus === 'done'" class="kpi-summary">
             <span class="kpi-stat">
               <span class="kpi-stat__value text-success">{{ store.passCount }}</span>
               <span class="kpi-stat__label">Pass</span>
@@ -29,33 +43,70 @@
             <span class="pass-rate" :class="passRateClass">{{ store.passRate }}%</span>
           </div>
 
+          <!-- Voice Mode toggle -->
           <button
-            v-if="store.simulationStatus === 'idle' || store.simulationStatus === 'error'"
-            class="btn btn-primary"
-            @click="runSimulation"
+            class="btn btn-voice-toggle"
+            :class="{ 'btn-voice-toggle--active': store.voiceMode }"
+            @click="store.toggleVoiceMode()"
+            title="Toggle Voice Mode (uses LiveKit + Gemini Multimodal Live)"
           >
-            ▶ Run Simulation
+            {{ store.voiceMode ? '🎙 Voice Mode ON' : '🎙 Voice Mode' }}
           </button>
 
-          <div v-else-if="store.simulationStatus === 'running'" class="running-indicator">
-            <span class="spinner-large"></span>
-            <span v-if="store.optimizationStatus === 'pushing'">⬆ Pushing to HighLevel...</span>
-            <span v-else-if="store.optimizationStatus === 'optimizing'">⚙ Optimizing prompt...</span>
-            <span v-else-if="store.flywheelPhase === 'fix'">
-              Fix Loop · Attempt {{ store.flywheelAttempt }}/{{ store.flywheelTotal }}
-            </span>
-            <span v-else>Simulating...</span>
-          </div>
-
-          <template v-if="store.simulationStatus === 'done'">
+          <!-- Text mode run/re-run buttons -->
+          <template v-if="!store.voiceMode">
             <button
-              v-if="store.promptHistory.length > 1"
-              class="btn btn-secondary"
-              @click="$router.push('/prompts')"
+              v-if="store.simulationStatus === 'idle' || store.simulationStatus === 'error'"
+              class="btn btn-primary"
+              @click="runSimulation"
             >
-              📋 Prompt History ({{ store.promptHistory.length }})
+              ▶ Run Simulation
             </button>
-            <button class="btn btn-secondary" @click="runSimulation">↻ Re-run</button>
+
+            <div v-else-if="store.simulationStatus === 'running'" class="running-indicator">
+              <span class="spinner-large"></span>
+              <span v-if="store.optimizationStatus === 'pushing'">⬆ Pushing to HighLevel...</span>
+              <span v-else-if="store.optimizationStatus === 'optimizing'">⚙ Optimizing prompt...</span>
+              <span v-else-if="store.flywheelPhase === 'fix'">
+                Fix Loop · Attempt {{ store.flywheelAttempt }}/{{ store.flywheelTotal }}
+              </span>
+              <span v-else>Simulating...</span>
+            </div>
+
+            <template v-if="store.simulationStatus === 'done'">
+              <button
+                v-if="store.promptHistory.length > 1"
+                class="btn btn-secondary"
+                @click="$router.push('/prompts')"
+              >
+                📋 Prompt History ({{ store.promptHistory.length }})
+              </button>
+              <button class="btn btn-secondary" @click="runSimulation">↻ Re-run</button>
+            </template>
+          </template>
+
+          <!-- Voice Mode run button -->
+          <template v-else>
+            <button
+              v-if="store.voiceRunStatus === 'idle' || store.voiceRunStatus === 'error'"
+              class="btn btn-primary"
+              @click="runVoiceSimulation"
+            >
+              ▶ Run Voice
+            </button>
+
+            <div v-else-if="store.voiceRunStatus === 'running'" class="running-indicator">
+              <span class="spinner-large"></span>
+              <span>{{ store.voiceStatusMessage || 'Voice call in progress...' }}</span>
+            </div>
+
+            <button
+              v-else-if="store.voiceRunStatus === 'done'"
+              class="btn btn-secondary"
+              @click="runVoiceSimulation"
+            >
+              ↻ Re-run Voice
+            </button>
           </template>
         </div>
       </div>
@@ -113,9 +164,14 @@
         ⏱ Simulation timed out — showing results for {{ store.simulationCompletedCount }} of {{ store.testCases.length }} test cases. Pass rate calculated over completed cases only.
       </div>
 
-      <!-- Error banner -->
-      <div v-if="store.simulationStatus === 'error'" class="error-banner">
+      <!-- Error banner (text mode) -->
+      <div v-if="!store.voiceMode && store.simulationStatus === 'error'" class="error-banner">
         ⚠ {{ store.simulationError }}
+      </div>
+
+      <!-- Error banner (voice mode) -->
+      <div v-if="store.voiceMode && store.voiceRunStatus === 'error'" class="error-banner">
+        ⚠ {{ store.voiceError }}
       </div>
 
 
@@ -125,24 +181,76 @@
         <div class="panel">
           <h2 class="panel-title">
             Test Cases
-            <span class="panel-count">{{ store.testCases.length }}</span>
+            <span v-if="store.voiceMode" class="panel-count voice-badge">🎙 Voice</span>
+            <span v-else class="panel-count">{{ store.testCases.length }}</span>
           </h2>
           <div class="panel-body test-cases-panel">
-            <div v-if="store.testCases.length === 0 && store.simulationStatus !== 'running'" class="empty-panel">
-              <span class="text-muted">Run simulation to generate test cases</span>
-            </div>
-            <div v-else class="test-cases-list" ref="testCasesListEl">
-              <TestCaseCard
-                v-for="(tc, i) in store.testCases"
-                :key="i"
-                :testCase="tc"
-                :index="i"
-                :result="store.results[i] || null"
-                :isActive="activeCase === i && store.evaluatingCaseIndex !== i"
-                :isEvaluating="store.evaluatingCaseIndex === i"
-                @click="selectCase(i)"
-              />
-            </div>
+            <!-- Text mode -->
+            <template v-if="!store.voiceMode">
+              <div v-if="store.testCases.length === 0 && store.simulationStatus !== 'running'" class="empty-panel">
+                <span class="text-muted">Run simulation to generate test cases</span>
+              </div>
+              <div v-else class="test-cases-list" ref="testCasesListEl">
+                <TestCaseCard
+                  v-for="(tc, i) in store.testCases"
+                  :key="i"
+                  :testCase="tc"
+                  :index="i"
+                  :result="store.results[i] || null"
+                  :isActive="activeCase === i && store.evaluatingCaseIndex !== i"
+                  :isEvaluating="store.evaluatingCaseIndex === i"
+                  @click="selectCase(i)"
+                />
+              </div>
+            </template>
+
+            <!-- Voice mode -->
+            <template v-else>
+              <div v-if="store.voiceTestCases.length === 0 && store.voiceRunStatus !== 'running'" class="empty-panel">
+                <span class="text-muted">Run Voice to start voice call simulation</span>
+              </div>
+              <div v-else class="test-cases-list">
+                <div
+                  v-for="(tc, i) in voiceDisplayCases"
+                  :key="i"
+                  class="voice-case-wrapper"
+                  @click="selectVoiceCase(i)"
+                >
+                  <TestCaseCard
+                    :testCase="tc"
+                    :index="i"
+                    :result="store.voiceResults[i]?.evaluation || null"
+                    :isActive="voiceActiveCase === i && !store.voiceResults[i]"
+                    :isEvaluating="false"
+                  />
+                  <!-- Recording player -->
+                  <div v-if="store.voiceResults[i]?.recordingFile" class="recording-player">
+                    <div class="recording-label">
+                      <span>🎵 Recording</span>
+                      <span v-if="store.voiceResults[i]?.recordingExists" class="recording-available">available</span>
+                      <span v-else class="recording-unavailable">file not found</span>
+                    </div>
+                    <audio
+                      v-if="store.voiceResults[i]?.recordingExists"
+                      controls
+                      preload="none"
+                      :src="`/api/voice/recording/${store.voiceResults[i].recordingFile}`"
+                      class="recording-audio"
+                    />
+                  </div>
+                </div>
+
+                <!-- Skeleton placeholders while running -->
+                <div
+                  v-if="store.voiceRunStatus === 'running'"
+                  v-for="_ in pendingVoiceCases"
+                  :key="'pending-' + _"
+                  class="voice-case-skeleton"
+                >
+                  <span class="skeleton-text">Waiting for call...</span>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
 
@@ -150,15 +258,24 @@
         <div class="panel">
           <h2 class="panel-title">
             Transcript
-            <span v-if="selectedCaseIndex !== null" class="panel-count">Case {{ selectedCaseIndex + 1 }}</span>
+            <span v-if="effectiveSelectedCase !== null" class="panel-count">Case {{ effectiveSelectedCase + 1 }}</span>
           </h2>
           <div class="panel-body transcript-panel">
-            <div v-if="selectedCaseIndex === null" class="empty-panel">
+            <div v-if="effectiveSelectedCase === null" class="empty-panel">
               <span class="text-muted">Select a test case to view transcript</span>
             </div>
+            <template v-else-if="store.voiceMode">
+              <div class="voice-transcript-note">
+                <p class="text-muted" style="font-size:13px; padding:16px; line-height:1.6;">
+                  Voice Mode uses real-time audio via Gemini Multimodal Live.<br>
+                  Text transcript may be unavailable if agents did not publish data messages.<br>
+                  Listen to the recording in the Test Cases panel.
+                </p>
+              </div>
+            </template>
             <TranscriptViewer
               v-else
-              :transcript="store.transcriptForCase(selectedCaseIndex)"
+              :transcript="store.transcriptForCase(effectiveSelectedCase)"
             />
           </div>
         </div>
@@ -167,19 +284,19 @@
         <div class="panel">
           <h2 class="panel-title">
             KPI Results
-            <span v-if="selectedResult" class="panel-count">
-              <KpiResultBadge :result="selectedResult.overall" />
+            <span v-if="effectiveSelectedResult" class="panel-count">
+              <KpiResultBadge :result="effectiveSelectedResult.overall" />
             </span>
           </h2>
           <div class="panel-body kpi-panel">
-            <div v-if="!selectedResult" class="empty-panel">
+            <div v-if="!effectiveSelectedResult" class="empty-panel">
               <span class="text-muted">Evaluation results will appear here</span>
             </div>
             <div v-else class="kpi-results">
-              <div class="kpi-summary-text">{{ selectedResult.summary }}</div>
+              <div class="kpi-summary-text">{{ effectiveSelectedResult.summary }}</div>
               <div class="kpi-items">
                 <div
-                  v-for="(kpi, i) in selectedResult.kpiResults"
+                  v-for="(kpi, i) in effectiveSelectedResult.kpiResults"
                   :key="i"
                   class="kpi-result-item"
                   :class="kpi.result === 'pass' ? 'kpi-result-item--pass' : 'kpi-result-item--fail'"
@@ -215,11 +332,46 @@ const testCasesListEl = ref(null);
 const showPromptModal = ref(false);
 const showDiffModal = ref(false);
 
+// Voice mode state
+const voiceActiveCase = ref(null);
+const voiceSelectedCase = ref(null);
+
 function openPromptModal() { showPromptModal.value = true; }
 function openDiffModal() { showDiffModal.value = true; }
 
 const selectedResult = computed(() =>
   selectedCaseIndex.value !== null ? store.results[selectedCaseIndex.value] || null : null,
+);
+
+// Unified selected case/result for panels (handles both modes)
+const effectiveSelectedCase = computed(() =>
+  store.voiceMode ? voiceSelectedCase.value : selectedCaseIndex.value,
+);
+
+const effectiveSelectedResult = computed(() => {
+  if (store.voiceMode) {
+    return voiceSelectedCase.value !== null
+      ? store.voiceResults[voiceSelectedCase.value]?.evaluation || null
+      : null;
+  }
+  return selectedResult.value;
+});
+
+// Voice mode computed helpers
+const voiceDisplayCases = computed(() => store.voiceTestCases);
+
+const pendingVoiceCases = computed(() => {
+  if (store.voiceRunStatus !== 'running') return 0;
+  const total = store.voiceTestCases.length || 0;
+  const done = store.voiceResults.filter(Boolean).length;
+  return Math.max(0, total - done);
+});
+
+const voicePassCount = computed(() =>
+  store.voiceResults.filter((r) => r?.evaluation?.overall === 'pass').length,
+);
+const voiceFailCount = computed(() =>
+  store.voiceResults.filter((r) => r?.evaluation?.overall === 'fail').length,
 );
 
 const promptPreview = computed(() => {
@@ -240,6 +392,10 @@ function selectCase(index) {
   userHasSelected.value = true;
 }
 
+function selectVoiceCase(index) {
+  voiceSelectedCase.value = index;
+}
+
 watch(activeCase, async (index) => {
   if (index === null) return;
   await nextTick();
@@ -248,6 +404,14 @@ watch(activeCase, async (index) => {
   const card = list.children[index];
   if (card) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 });
+
+// Auto-select first voice result when it arrives
+watch(() => store.voiceResults, (results) => {
+  if (voiceSelectedCase.value === null) {
+    const firstDone = results.findIndex((r) => r != null);
+    if (firstDone !== -1) voiceSelectedCase.value = firstDone;
+  }
+}, { deep: true });
 
 let eventSource = null;
 
@@ -314,7 +478,12 @@ function runSimulation() {
   };
 }
 
-
+function runVoiceSimulation() {
+  if (!store.selectedAgent) return;
+  voiceSelectedCase.value = null;
+  voiceActiveCase.value = null;
+  store.startVoiceRun(store.selectedAgent.id);
+}
 </script>
 
 <style scoped>
@@ -703,5 +872,102 @@ function runSimulation() {
   font-size: 12px;
   color: #64748b;
   line-height: 1.5;
+}
+
+/* Voice Mode */
+
+.btn-voice-toggle {
+  background: #1a1d2e;
+  border: 1px solid #2d3348;
+  color: #94a3b8;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s, background 0.2s;
+}
+
+.btn-voice-toggle:hover {
+  border-color: #7c3aed;
+  color: #a78bfa;
+}
+
+.btn-voice-toggle--active {
+  border-color: #7c3aed;
+  background: rgba(124, 58, 237, 0.12);
+  color: #a78bfa;
+}
+
+.voice-badge {
+  font-size: 11px;
+  color: #a78bfa;
+  background: rgba(124, 58, 237, 0.12);
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.voice-case-wrapper {
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.recording-player {
+  padding: 8px 12px;
+  background: #13151f;
+  border: 1px solid #2d3348;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recording-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.recording-available {
+  color: #4ade80;
+  font-size: 10px;
+}
+
+.recording-unavailable {
+  color: #f87171;
+  font-size: 10px;
+}
+
+.recording-audio {
+  width: 100%;
+  height: 36px;
+  border-radius: 4px;
+  accent-color: #7c3aed;
+}
+
+.voice-case-skeleton {
+  height: 80px;
+  background: #13151f;
+  border: 1px dashed #2d3348;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.skeleton-text {
+  font-size: 12px;
+  color: #475569;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }
 </style>

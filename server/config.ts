@@ -15,6 +15,13 @@ const envSchema = z.object({
   SIMULATION_TIMEOUT_MS: z.string().default('660000').transform(Number),
   MAX_OPTIMIZE_ATTEMPTS: z.string().default('2').transform(Number),
   MAX_HARDEN_BATCHES: z.string().default('2').transform(Number),
+  // LiveKit / Voice Mode
+  LIVEKIT_URL: z.string().default('ws://localhost:7880'),
+  LIVEKIT_API_KEY: z.string().default('devkey'),
+  LIVEKIT_API_SECRET: z.string().default('devsecret'),
+  GOOGLE_API_KEY: z.string().default(''),
+  VOICE_CALL_TIMEOUT_MS: z.string().default('180000').transform(Number),
+  RECORDINGS_DIR: z.string().default('./recordings'),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -63,5 +70,17 @@ export const config = {
     timeoutMs: env.SIMULATION_TIMEOUT_MS,
     maxOptimizeAttempts: env.MAX_OPTIMIZE_ATTEMPTS,
     maxHardenBatches: env.MAX_HARDEN_BATCHES,
+  },
+
+  livekit: {
+    url: env.LIVEKIT_URL,
+    apiKey: env.LIVEKIT_API_KEY,
+    apiSecret: env.LIVEKIT_API_SECRET,
+    voiceCallTimeoutMs: env.VOICE_CALL_TIMEOUT_MS,
+    recordingsDir: env.RECORDINGS_DIR,
+  },
+
+  google: {
+    apiKey: env.GOOGLE_API_KEY,
   },
 } as const;

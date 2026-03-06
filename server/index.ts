@@ -7,6 +7,7 @@ import { apiMiddleware, errorHandler } from './middleware/api';
 import authRouter from './routes/auth';
 import agentsRouter from './routes/agents';
 import simulationRouter from './routes/simulation';
+import voiceRouter from './routes/voice';
 
 const app = express();
 
@@ -42,6 +43,7 @@ app.use('/api', apiMiddleware);
 app.use('/', authRouter);
 app.use('/api', agentsRouter);
 app.use('/api', simulationRouter);
+app.use('/api', voiceRouter);
 
 // SPA fallback — serve index.html for all non-API routes
 app.get('*', (req, res) => {
