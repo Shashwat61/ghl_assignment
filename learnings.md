@@ -313,6 +313,52 @@
 
 ---
 
+## 2026-03-08 Feature: LiveKit Voice Mode — Agent-to-Agent Calls + Transcript Collection
+
+**Context:** Added a Voice Mode alongside the existing text simulation flywheel. Each test case becomes a real-time voice call between two Gemini Live agents in a LiveKit room: a dental-agent (AI assistant using HL system prompt) and a caller-agent (simulated patient). Transcripts are collected and evaluated by the same Chain 4 evaluator.
+
+**Key decisions:**
+
+**Self-hosted LiveKit via Docker** — LiveKit Cloud requires cloud storage for egress recordings. Self-hosted with Docker gives local control and avoids cloud billing for a dev/demo tool.
+
+**Two separate agent workers** — `@livekit/agents` requires long-running WorkerProcess instances, not request handlers. `agent/dental-agent.ts` and `agent/caller-agent.ts` run as separate Node.js workers via `npm run agents`, listening for dispatch requests from the backend.
+
+**Sequential rooms (one call at a time)** — Gemini Realtime API has concurrent session limits. One room per test case prevents rate-limit collisions and makes debugging easier.
+
+**`ConversationItemAdded` with `role === 'assistant'` filter** — This event fires for BOTH what the agent hears (role: 'user') AND what it says (role: 'assistant'). Without filtering, each agent published the other's speech too, causing every turn to appear twice. Fix: each agent only publishes `item.role === 'assistant'` turns.
+
+**Impact:** `agent/dental-agent.ts`, `agent/caller-agent.ts`, `agent/index.ts`, `server/services/livekitService.ts`, `server/routes/voice.ts`, `docker-compose.yml`, `livekit.yaml`, `egress.yaml`, `tsconfig.agent.json`.
+
+---
+
+## 2026-03-08 Fix: Both Agents Listening to Backend-Listener Instead of Each Other
+
+**Root Cause:** `RoomIO` (the audio I/O layer inside `@livekit/agents`) calls `participantAvailableFuture.resolve()` on the **first** participant it sees that matches `participantKinds`. The backend-listener was joining the room **before** agents were dispatched. When agents joined, the backend-listener was already present as `ParticipantKind.STANDARD` — which matched our `participantKinds: [AGENT, STANDARD, SIP]`. Both agents locked onto the backend-listener as their audio input target. Neither agent ever heard the other.
+
+**Fix:** Moved `joinRoomAsListener` to **after** `waitForParticipants` succeeds. Agents now enter an empty room, see only each other (`ParticipantKind.AGENT`), and lock onto each other for audio. The backend-listener joins after that — both agents have already resolved their participant selection so it has no effect on audio routing.
+
+**Key insight:** `participantAvailableFuture` is a one-shot latch. Once resolved, any subsequent `onParticipantConnected` calls are ignored (`if (this.participantAvailableFuture.done) return`). Order of joining matters critically in agent-to-agent setups.
+
+**Impact:** `server/routes/voice.ts` — moved `joinRoomAsListener` call after `waitForParticipants`.
+
+---
+
+## 2026-03-08 Fix: Egress Recording — EncodedFileOutput Requires Cloud Storage Backend
+
+**Root Cause:** `EncodedFileOutput` in the LiveKit protocol has an `output` oneof field that must be set to `s3`, `gcp`, `azure`, or `aliOSS`. It is not optional. `local_directory` in `egress.yaml` is a secondary download path **after** cloud upload — not a replacement for the storage backend. Sending `EncodedFileOutput({ filepath: 'file.ogg' })` with no `.output` field causes the egress server to reject with `"request has missing or invalid field: output"`.
+
+**Additionally:** `RoomCompositeEgress` uses Chrome (headless browser) to compose the room layout. Chrome fails to start inside the Docker macOS environment ("Start signal not received"), making `RoomCompositeEgress` unusable locally on macOS regardless.
+
+**Solution (Option B — backend listener audio capture):** The `backend-listener` already subscribes to all tracks via `@livekit/rtc-node`. `AudioStream` provides a `ReadableStream<AudioFrame>` over any `RemoteAudioTrack`, yielding `Int16Array` PCM frames at a configurable sample rate. These are piped directly into a local `ffmpeg` process (stdin → Ogg Vorbis file). No egress container, no cloud storage, no Chrome needed.
+
+**ffmpeg command:** `ffmpeg -f s16le -ar 48000 -ac 1 -i pipe:0 -c:a libvorbis -q:a 4 <output.ogg>`
+
+**`stopRecording()`** closes ffmpeg's stdin (signals EOF) and waits up to 5s for the file to be finalised before the room is deleted.
+
+**Impact:** `server/services/livekitService.ts` — `joinRoomAsListener` now also spawns ffmpeg, subscribes `AudioStream` per track via `RoomEvent.TrackSubscribed`, returns `stopRecording()` and `recordingPath`. `server/routes/voice.ts` — calls `stopRecording()` after call ends, logs recording filename.
+
+---
+
 ## 2026-03-01 Decision: Patch-Based Prompt Optimization (Chain 5)
 
 **Context:** Chain 5 was regenerating the entire agent prompt from scratch (`max_tokens: 4096`). For a typical 500-800 token prompt, this was slow — Claude had to output the full text token by token. The passes list was also bloated (full scenario + KPI entries for every passing KPI).

@@ -12,7 +12,8 @@
     "build": "npm run build:server && cd frontend && npm install && npm run build",
     "start": "node dist/index.js",
     "demo": "npm run build && npm start",
-    "agents": "ts-node --project tsconfig.json agent/index.ts dev"
+    "build:agents": "tsc --project tsconfig.agent.json",
+    "agents": "npm run build:agents && node dist/agent/index.js dev"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

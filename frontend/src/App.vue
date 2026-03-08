@@ -1,37 +1,21 @@
 <template>
   <div class="app">
-    <!-- Block direct access outside HL iframe -->
-    <div v-if="!isInIframe" class="not-embedded">
-      <div class="not-embedded-card">
-        <div class="not-embedded-icon">⚡</div>
-        <h2>Voice AI Performance Optimizer</h2>
-        <p>This app runs inside <strong>HighLevel</strong> as a Marketplace integration.<br>
-        Install it from the HL Marketplace and open it from your sub-account sidebar.</p>
-      </div>
-    </div>
-
-    <template v-else>
-      <StatusBar />
-      <main class="main-content">
-        <router-view />
-      </main>
-    </template>
+    <StatusBar />
+    <main class="main-content">
+      <router-view />
+    </main>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { onMounted } from 'vue';
 import StatusBar from './components/StatusBar.vue';
 import { useCopilotStore } from './stores/copilot.js';
 
 const store = useCopilotStore();
-// True when running inside an iframe (i.e. embedded in HL Custom Page)
-const isInIframe = ref(window.self !== window.top);
 
 onMounted(() => {
-  if (isInIframe.value) {
-    store.checkAuth();
-  }
+  store.checkAuth();
 });
 </script>
 
@@ -63,44 +47,6 @@ body {
   width: 100%;
 }
 
-.not-embedded {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 100vh;
-  background: #0f1117;
-}
-
-.not-embedded-card {
-  text-align: center;
-  max-width: 420px;
-  padding: 48px 40px;
-  background: #1a1d2e;
-  border: 1px solid #2d3348;
-  border-radius: 16px;
-}
-
-.not-embedded-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-}
-
-.not-embedded-card h2 {
-  font-size: 20px;
-  font-weight: 700;
-  color: #e2e8f0;
-  margin-bottom: 14px;
-}
-
-.not-embedded-card p {
-  font-size: 14px;
-  color: #64748b;
-  line-height: 1.7;
-}
-
-.not-embedded-card strong {
-  color: #a78bfa;
-}
 
 /* Global utility classes */
 .btn {

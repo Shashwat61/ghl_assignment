@@ -14,18 +14,23 @@
  *   - LiveKit server running (docker compose up -d)
  *   - .env configured with LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET, GOOGLE_API_KEY
  */
-import { AgentServer, ServerOptions, cli } from '@livekit/agents';
+import { AgentServer, ServerOptions, initializeLogger } from '@livekit/agents';
 import * as path from 'path';
 import dotenv from 'dotenv';
 dotenv.config();
+
+initializeLogger({ level: 'info', pretty: true });
 
 const lkUrl = process.env.LIVEKIT_URL || 'ws://localhost:7880';
 const apiKey = process.env.LIVEKIT_API_KEY || 'devkey';
 const apiSecret = process.env.LIVEKIT_API_SECRET || 'devsecret';
 
-// WorkerOptions.agent expects a path to the agent file (loaded dynamically by the framework)
+// Point at compiled .js files — the framework dynamically imports this path in child processes.
+// At runtime __dirname is dist/agent/, so sibling .js files are right here.
+const agentDistDir = __dirname;
+
 const dentalOpts = new ServerOptions({
-  agent: path.resolve(__dirname, 'dental-agent.ts'),
+  agent: path.join(agentDistDir, 'dental-agent.js'),
   agentName: 'dental-agent',
   wsURL: lkUrl,
   apiKey,
@@ -33,7 +38,7 @@ const dentalOpts = new ServerOptions({
 });
 
 const callerOpts = new ServerOptions({
-  agent: path.resolve(__dirname, 'caller-agent.ts'),
+  agent: path.join(agentDistDir, 'caller-agent.js'),
   agentName: 'caller-agent',
   wsURL: lkUrl,
   apiKey,

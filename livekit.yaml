@@ -4,5 +4,7 @@ rtc:
   udp_port: 7882
 keys:
   devkey: devsecret
+redis:
+  address: redis:6379
 logging:
   level: info

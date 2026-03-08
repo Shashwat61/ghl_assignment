@@ -223,21 +223,6 @@
                     :isActive="voiceActiveCase === i && !store.voiceResults[i]"
                     :isEvaluating="false"
                   />
-                  <!-- Recording player -->
-                  <div v-if="store.voiceResults[i]?.recordingFile" class="recording-player">
-                    <div class="recording-label">
-                      <span>🎵 Recording</span>
-                      <span v-if="store.voiceResults[i]?.recordingExists" class="recording-available">available</span>
-                      <span v-else class="recording-unavailable">file not found</span>
-                    </div>
-                    <audio
-                      v-if="store.voiceResults[i]?.recordingExists"
-                      controls
-                      preload="none"
-                      :src="`/api/voice/recording/${store.voiceResults[i].recordingFile}`"
-                      class="recording-audio"
-                    />
-                  </div>
                 </div>
 
                 <!-- Skeleton placeholders while running -->
@@ -264,15 +249,6 @@
             <div v-if="effectiveSelectedCase === null" class="empty-panel">
               <span class="text-muted">Select a test case to view transcript</span>
             </div>
-            <template v-else-if="store.voiceMode">
-              <div class="voice-transcript-note">
-                <p class="text-muted" style="font-size:13px; padding:16px; line-height:1.6;">
-                  Voice Mode uses real-time audio via Gemini Multimodal Live.<br>
-                  Text transcript may be unavailable if agents did not publish data messages.<br>
-                  Listen to the recording in the Test Cases panel.
-                </p>
-              </div>
-            </template>
             <TranscriptViewer
               v-else
               :transcript="store.transcriptForCase(effectiveSelectedCase)"

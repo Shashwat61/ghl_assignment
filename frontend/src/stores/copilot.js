@@ -45,7 +45,7 @@ export const useCopilotStore = defineStore('copilot', {
     voiceSessionId: null,
     voiceRunStatus: 'idle', // 'idle' | 'running' | 'done' | 'error'
     voiceError: null,
-    voiceResults: [], // [{ index, testCase, evaluation, recordingFile, recordingExists }]
+    voiceResults: [], // [{ index, testCase, evaluation, recordingFile }]
     voiceTestCases: [], // parallel test cases list for voice mode
     voiceStatusMessage: '',
   }),
@@ -330,11 +330,13 @@ export const useCopilotStore = defineStore('copilot', {
               index: data.index,
               testCase: data.testCase,
               evaluation: data.evaluation,
-              recordingFile: data.recordingFile,
-              recordingExists: data.recordingExists,
+              recordingFile: data.recordingFile || null,
             };
             if (!this.voiceTestCases[data.index]) {
               this.voiceTestCases[data.index] = data.testCase;
+            }
+            if (data.transcript && data.transcript.length > 0) {
+              this.liveTranscripts[data.index] = data.transcript;
             }
             break;
 

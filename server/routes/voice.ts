@@ -1,6 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import * as fs from 'fs';
-import * as path from 'path';
 import { requireAuth } from '../middleware/auth';
 import { hlClient } from '../services/hlClient';
 import { livekitService } from '../services/livekitService';
@@ -138,35 +137,6 @@ router.get(
   },
 );
 
-/**
- * GET /api/voice/recording/:filename
- * Serves a saved recording file from ./recordings/
- */
-router.get(
-  '/voice/recording/:filename',
-  requireAuth,
-  (req: Request, res: Response) => {
-    const { filename } = req.params;
-
-    // Sanitize: only allow safe filenames (no path traversal)
-    if (!/^[\w\-]+\.mp4$/.test(filename)) {
-      res.status(400).json({ error: 'Invalid filename' });
-      return;
-    }
-
-    const filePath = path.join(path.resolve(config.livekit.recordingsDir), filename);
-
-    if (!fs.existsSync(filePath)) {
-      res.status(404).json({ error: 'Recording not found' });
-      return;
-    }
-
-    res.setHeader('Content-Type', 'audio/mp4');
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.sendFile(filePath);
-  },
-);
-
 // ---------------------------------------------------------------------------
 // Core voice simulation logic
 // ---------------------------------------------------------------------------
@@ -190,7 +160,7 @@ async function runVoiceSimulation(agentId: string, sessionId: string): Promise<v
     index: number;
     testCase: typeof testCases[number];
     evaluation: ReturnType<typeof evaluateTranscript> extends Promise<infer T> ? T : never;
-    recordingFile: string;
+    recordingFile: string | null;
   }> = [];
 
   for (let i = 0; i < testCases.length; i++) {
@@ -205,7 +175,9 @@ async function runVoiceSimulation(agentId: string, sessionId: string): Promise<v
 
     emitVoiceEvent(sessionId, 'voice_status', { message: `Case ${i + 1}/${testCases.length}: Creating LiveKit room...` });
 
-    let egressId: string | null = null;
+    let listenerRoom: import('@livekit/rtc-node').Room | null = null;
+    let stopRecording: (() => Promise<void>) | null = null;
+    let recordingPath: string | null = null;
     const transcript: ConversationTurn[] = [];
 
     try {
@@ -219,34 +191,13 @@ async function runVoiceSimulation(agentId: string, sessionId: string): Promise<v
 
       await livekitService.createRoom(roomName, roomMetadata);
 
-      // Start recording
-      try {
-        egressId = await livekitService.startRoomCompositeEgress(roomName);
-        emitVoiceEvent(sessionId, 'voice_status', { message: `Case ${i + 1}: Recording started (egressId=${egressId})` });
-      } catch (egressErr) {
-        logger.warn(`Failed to start egress for room ${roomName} — continuing without recording`, { error: egressErr });
-        emitVoiceEvent(sessionId, 'voice_status', { message: `Case ${i + 1}: Recording unavailable (egress not running) — call will proceed` });
-      }
-
-      // Generate agent tokens
-      const [dentalToken, callerToken] = await Promise.all([
-        livekitService.generateToken(roomName, 'dental-agent'),
-        livekitService.generateToken(roomName, 'caller-agent'),
+      // Dispatch both agents into the room via AgentDispatchClient
+      emitVoiceEvent(sessionId, 'voice_status', { message: `Case ${i + 1}: Dispatching agents...` });
+      await Promise.all([
+        livekitService.dispatchAgent(roomName, 'dental-agent'),
+        livekitService.dispatchAgent(roomName, 'caller-agent'),
       ]);
-
-      emitVoiceEvent(sessionId, 'voice_status', {
-        message: `Case ${i + 1}: Room ready. Dispatch agents with these tokens (see logs).`,
-        roomName,
-        dentalToken: dentalToken.slice(0, 20) + '...',
-        callerToken: callerToken.slice(0, 20) + '...',
-      });
-
-      logger.info(`Voice room ready`, {
-        roomName,
-        scenario: tc.scenario.slice(0, 60),
-        dentalToken: dentalToken.slice(0, 40),
-        callerToken: callerToken.slice(0, 40),
-      });
+      logger.info(`Agents dispatched to room ${roomName}`);
 
       // Wait for agents to join (30s window)
       emitVoiceEvent(sessionId, 'voice_status', { message: `Case ${i + 1}: Waiting for agents to join...` });
@@ -254,10 +205,25 @@ async function runVoiceSimulation(agentId: string, sessionId: string): Promise<v
 
       if (!joined) {
         emitVoiceEvent(sessionId, 'voice_status', {
-          message: `Case ${i + 1}: Agents did not join within 30s — skipping (is agent/index.ts running?)`,
+          message: `Case ${i + 1}: Agents did not join within 30s — is "npm run agents" running?`,
         });
       } else {
         emitVoiceEvent(sessionId, 'voice_status', { message: `Case ${i + 1}: Both agents joined. Call in progress (up to 3 min)...` });
+
+        // Join as backend-listener AFTER agents have joined.
+        // Agents join as ParticipantKind.AGENT and lock onto each other for audio input.
+        // The listener joins as STANDARD kind — joining before agents would cause them
+        // to pick the listener as their audio target instead of each other.
+        try {
+          const listener = await livekitService.joinRoomAsListener(roomName);
+          listenerRoom = listener.room;
+          (listenerRoom as any).__transcript = listener.transcript;
+          stopRecording = listener.stopRecording;
+          recordingPath = listener.recordingPath;
+          logger.info(`Backend listener joined room after agents: ${roomName}`);
+        } catch (listenerErr) {
+          logger.warn(`Failed to join room as listener — transcripts/recording won't be collected`, { error: listenerErr });
+        }
 
         // Wait for call to end or timeout
         const outcome = await livekitService.waitForRoomEmpty(roomName, config.livekit.voiceCallTimeoutMs);
@@ -266,14 +232,23 @@ async function runVoiceSimulation(agentId: string, sessionId: string): Promise<v
         });
       }
 
-      // Stop recording
-      if (egressId) {
-        await livekitService.stopEgress(egressId);
-        egressId = null;
+      // Stop recording — flushes ffmpeg and finalises the .ogg file
+      if (stopRecording) {
+        await stopRecording().catch((e) => logger.warn('stopRecording error', { error: e }));
+        stopRecording = null;
       }
 
-      // Small grace period for file to flush
-      await new Promise((r) => setTimeout(r, 2000));
+      // Collect transcript from listener
+      if (listenerRoom && (listenerRoom as any).__transcript) {
+        transcript.push(...(listenerRoom as any).__transcript as ConversationTurn[]);
+        logger.info(`Collected ${transcript.length} transcript turns from room ${roomName}`);
+      }
+
+      // Disconnect listener
+      if (listenerRoom) {
+        try { await listenerRoom.disconnect(); } catch { /* non-fatal */ }
+        listenerRoom = null;
+      }
 
       // Evaluate with whatever transcript we collected (or a minimal fallback)
       emitVoiceEvent(sessionId, 'voice_status', { message: `Case ${i + 1}: Evaluating...` });
@@ -291,29 +266,33 @@ async function runVoiceSimulation(agentId: string, sessionId: string): Promise<v
       }
 
       const evaluation = await evaluateTranscript(transcript, tc.kpis, tc.scenario);
-      const recordingFile = livekitService.recordingFilename(roomName);
+      const recFile = recordingPath && fs.existsSync(recordingPath)
+        ? livekitService.recordingFilename(roomName)
+        : null;
 
       emitVoiceEvent(sessionId, 'voice_case_complete', {
         index: i,
         testCase: tc,
         evaluation,
-        recordingFile,
-        recordingExists: fs.existsSync(livekitService.recordingPath(roomName)),
+        transcript,
+        recordingFile: recFile,
       });
 
-      allResults.push({ index: i, testCase: tc, evaluation, recordingFile });
+      allResults.push({ index: i, testCase: tc, evaluation, recordingFile: recFile });
     } catch (caseErr) {
       logger.error(`Voice case ${i} failed`, { roomName, error: caseErr instanceof Error ? caseErr.stack : caseErr });
-
-      if (egressId) {
-        await livekitService.stopEgress(egressId).catch(() => {});
-      }
 
       emitVoiceEvent(sessionId, 'voice_case_error', {
         index: i,
         message: caseErr instanceof Error ? caseErr.message : 'Case failed',
       });
     } finally {
+      if (stopRecording) {
+        await stopRecording().catch(() => {});
+      }
+      if (listenerRoom) {
+        try { await listenerRoom.disconnect(); } catch { /* non-fatal */ }
+      }
       await livekitService.deleteRoom(roomName).catch(() => {});
     }
   }
